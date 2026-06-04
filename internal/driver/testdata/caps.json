@@ -19,7 +19,11 @@
       "list",
       "pull",
       "status",
-      "verify"
+      "verify",
+      "diff",
+      "push",
+      "deploy",
+      "rm"
     ],
     "meta": [
       "caps",

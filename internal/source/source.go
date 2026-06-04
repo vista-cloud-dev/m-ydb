@@ -13,6 +13,7 @@ package source
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"io/fs"
 	"os"
@@ -22,6 +23,10 @@ import (
 	"strings"
 )
 
+// errNoDirs is returned by a write/remove when no source directory is
+// configured (so there is no primary dir to target).
+var errNoDirs = fmt.Errorf("source: no routine source directory configured")
+
 // Routine is one routine in the engine's source.
 type Routine struct {
 	Name string // filename, e.g. "FOO.m"
@@ -30,10 +35,17 @@ type Routine struct {
 
 // Store lists and reads .m source files from the engine's routine source
 // directories, in search-path order (the first directory holding a given name
-// wins, matching YottaDB's own resolution).
+// wins, matching YottaDB's own resolution). Writes/removes target the primary
+// (first) source directory — the one the driver owns and pushes into.
 type Store interface {
 	List(ctx context.Context) ([]Routine, error)
 	Read(ctx context.Context, name string) ([]byte, error)
+	// Write persists content as the routine in the primary source dir and
+	// returns the resulting Routine (name + new source TS).
+	Write(ctx context.Context, name string, content []byte) (Routine, error)
+	// Remove deletes the routine from the primary source dir. A routine absent
+	// from the primary dir is a no-op (nil error).
+	Remove(ctx context.Context, name string) error
 }
 
 // nameRe restricts routine filenames to YottaDB's grammar, which also makes
@@ -118,6 +130,42 @@ func (s *FileStore) Read(_ context.Context, name string) ([]byte, error) {
 	return nil, fs.ErrNotExist
 }
 
+func (s *FileStore) Write(_ context.Context, name string, content []byte) (Routine, error) {
+	if !nameRe(name) {
+		return Routine{}, fmt.Errorf("source: invalid routine name %q", name)
+	}
+	if len(s.dirs) == 0 {
+		return Routine{}, errNoDirs
+	}
+	dir := s.dirs[0]
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Routine{}, err
+	}
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, content, 0o644); err != nil {
+		return Routine{}, err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return Routine{}, err
+	}
+	return Routine{Name: name, TS: strconv.FormatInt(info.ModTime().Unix(), 10)}, nil
+}
+
+func (s *FileStore) Remove(_ context.Context, name string) error {
+	if !nameRe(name) {
+		return fmt.Errorf("source: invalid routine name %q", name)
+	}
+	if len(s.dirs) == 0 {
+		return errNoDirs
+	}
+	err := os.Remove(filepath.Join(s.dirs[0], name))
+	if os.IsNotExist(err) {
+		return nil // no-op: nothing to remove in the primary dir
+	}
+	return err
+}
+
 // --- ShellStore (docker transport) -------------------------------------------
 
 // Sheller runs a /bin/sh -c script in the engine's filesystem context (inside
@@ -185,6 +233,47 @@ func (s *ShellStore) Read(ctx context.Context, name string) ([]byte, error) {
 		return nil, fs.ErrNotExist
 	}
 	return []byte(out), nil
+}
+
+func (s *ShellStore) Write(ctx context.Context, name string, content []byte) (Routine, error) {
+	if !nameRe(name) {
+		return Routine{}, fmt.Errorf("source: invalid routine name %q", name)
+	}
+	if len(s.dirs) == 0 {
+		return Routine{}, errNoDirs
+	}
+	dir := s.dirs[0]
+	// base64 the content so arbitrary bytes survive the shell with no quoting
+	// hazard, decode it in the container, then print the new file's mtime.
+	enc := base64.StdEncoding.EncodeToString(content)
+	script := fmt.Sprintf(`mkdir -p '%s'; printf '%%s' '%s' | base64 -d > '%s/%s'; stat -c %%Y '%s/%s'`,
+		dir, enc, dir, name, dir, name)
+	out, code, err := s.sh.Sh(ctx, script)
+	if err != nil {
+		return Routine{}, err
+	}
+	if code != 0 {
+		return Routine{}, fmt.Errorf("source: write %s failed (exit %d)", name, code)
+	}
+	return Routine{Name: name, TS: strings.TrimSpace(out)}, nil
+}
+
+func (s *ShellStore) Remove(ctx context.Context, name string) error {
+	if !nameRe(name) {
+		return fmt.Errorf("source: invalid routine name %q", name)
+	}
+	if len(s.dirs) == 0 {
+		return errNoDirs
+	}
+	dir := s.dirs[0]
+	_, code, err := s.sh.Sh(ctx, fmt.Sprintf(`rm -f '%s/%s'`, dir, name))
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return fmt.Errorf("source: remove %s failed (exit %d)", name, code)
+	}
+	return nil
 }
 
 // --- helpers -----------------------------------------------------------------

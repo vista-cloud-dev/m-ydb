@@ -17,10 +17,13 @@
 //	m-ydb sync pull        source → mirror, incremental via the manifest
 //	m-ydb sync status      source vs. local manifest drift (exit 3 on drift)
 //	m-ydb sync verify      re-hash mirror files against the manifest (exit 3)
+//	m-ydb sync diff        unified diff of one routine (instance vs. mirror)
+//	m-ydb sync push        write routines back to the instance (conflict-checked; exit 4)
+//	m-ydb sync deploy      install a routine-source library; --prune true-syncs
+//	m-ydb sync rm          remove a routine from the instance
 //
-// Later milestones add the sync write verbs (push/deploy/diff/rm) and the exec,
-// data, cover, admin, and native axes; caps grows to advertise each as it lands
-// (caps is honest — advertised == implemented).
+// Later milestones add the exec, data, cover, admin, and native axes; caps grows
+// to advertise each as it lands (caps is honest — advertised == implemented).
 //
 // Connection config comes from flags or M_YDB_* env (flags win), with unset
 // paths falling back to the standard ydb_*/gtm_* env; see internal/config.
@@ -47,7 +50,7 @@ type CLI struct {
 
 	Meta      metaCmd      `cmd:"" help:"Introspection + power tools: caps / info / version / schema / doctor."`
 	Lifecycle lifecycleCmd `cmd:"" help:"Manage the engine instance: status / wait (up/down/restart/provision/destroy land in M1b)."`
-	Sync      syncCmd      `cmd:"" help:"Source axis: routine source ↔ instance (list / pull / status / verify; push/deploy/diff/rm land next)."`
+	Sync      syncCmd      `cmd:"" help:"Source axis: routine source ↔ instance (list / pull / status / verify / diff / push / deploy / rm)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }

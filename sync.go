@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/vista-cloud-dev/m-ydb/clikit"
@@ -13,19 +15,25 @@ import (
 	"github.com/vista-cloud-dev/m-ydb/internal/manifest"
 	"github.com/vista-cloud-dev/m-ydb/internal/mirror"
 	"github.com/vista-cloud-dev/m-ydb/internal/source"
+	"github.com/vista-cloud-dev/m-ydb/internal/udiff"
 )
 
 // syncCmd is the sync axis (driver-contract §5.2) — routine source ↔ instance.
 // For YottaDB the source IS the .m file on disk, so sync is filesystem-native
-// over $ydb_routines: list/pull/status/verify materialize and track a local
-// mirror, and --filter matches the bare (extension-stripped) routine name. The
-// write verbs (push/deploy/diff/rm) land in the next M2 slice; caps grows to
-// advertise each as it does (caps is honest — advertised == implemented).
+// over $ydb_routines: the read verbs (list/pull/status/verify) materialize and
+// track a local mirror; the write verbs (diff/push/deploy/rm) reconcile the
+// instance from local source — push is conflict-checked against the manifest
+// (exit 4 unless --force), deploy installs a library with a common-prefix prune
+// guard. --filter matches the bare (extension-stripped) routine name.
 type syncCmd struct {
 	List   syncListCmd   `cmd:"" name:"list" help:"List routine source names ($ydb_routines) — connectivity + inventory (no writes)."`
 	Pull   syncPullCmd   `cmd:"" name:"pull" help:"Materialize routine source → mirror, incremental via the manifest."`
 	Status syncStatusCmd `cmd:"" name:"status" help:"Diff source vs. local manifest: new / changed / deleted (exit 3 on drift)."`
 	Verify syncVerifyCmd `cmd:"" name:"verify" help:"Re-hash mirror files against the manifest (exit 3 on mismatch)."`
+	Diff   syncDiffCmd   `cmd:"" name:"diff" help:"Unified diff of one routine: instance vs. mirror (or vs. --from)."`
+	Push   syncPushCmd   `cmd:"" name:"push" help:"Write routines back to the instance from the mirror or --from (conflict-checked; exit 4 unless --force)."`
+	Deploy syncDeployCmd `cmd:"" name:"deploy" help:"Install a routine-source library into the instance; --prune true-syncs under a common-prefix guard."`
+	Rm     syncRmCmd     `cmd:"" name:"rm" help:"Remove a routine from the instance (and the mirror/manifest)."`
 }
 
 // --- list --------------------------------------------------------------------
@@ -257,6 +265,307 @@ func (syncVerifyCmd) Run(cc *clikit.Context, conn *config.Conn) error {
 		"re-run 'm-ydb sync pull' or investigate tampering")
 }
 
+// --- diff --------------------------------------------------------------------
+
+type syncDiffCmd struct {
+	Name string `arg:"" help:"Routine to diff (bare name or NAME.m)."`
+	From string `help:"Compare the instance against this directory instead of the mirror." placeholder:"DIR"`
+}
+
+type syncDiffResult struct {
+	Unified string `json:"unified"`
+}
+
+func (c *syncDiffCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	store, err := conn.SourceStore()
+	if err != nil {
+		return usageErr(err)
+	}
+	name := routineFile(c.Name)
+	ctx := context.Background()
+
+	instBytes, ierr := store.Read(ctx, name)
+	if ierr != nil && !os.IsNotExist(ierr) {
+		return runtimeErr(ierr)
+	}
+	localPath := conn.Layout().RoutinePath(name)
+	bLabel := "mirror/" + name
+	if c.From != "" {
+		localPath = filepath.Join(c.From, name)
+		bLabel = filepath.Join(c.From, name)
+	}
+	localBytes, lerr := os.ReadFile(localPath)
+	if lerr != nil && !os.IsNotExist(lerr) {
+		return runtimeErr(lerr)
+	}
+
+	// Normalize both sides so line-ending differences don't show as changes.
+	a := udiff.SplitLines(string(mirror.Normalize(instBytes)))
+	b := udiff.SplitLines(string(mirror.Normalize(localBytes)))
+	u := udiff.Unified("instance/"+name, bLabel, a, b)
+
+	return cc.Result(syncDiffResult{Unified: u}, func() {
+		if u == "" {
+			fmt.Fprintln(cc.Stdout, cc.Success(name+": no differences"))
+			return
+		}
+		fmt.Fprint(cc.Stdout, u)
+	})
+}
+
+// --- push --------------------------------------------------------------------
+
+type syncPushCmd struct {
+	From  string `help:"Push .m files from this directory instead of the mirror." placeholder:"DIR"`
+	Force bool   `help:"Override the instance conflict guard (overwrite out-of-band edits)."`
+}
+
+type syncPushResult struct {
+	Pushed   []string `json:"pushed"`
+	Compiled int      `json:"compiled"`
+	DryRun   bool     `json:"dryRun,omitempty"`
+}
+
+func (c *syncPushCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	store, err := conn.SourceStore()
+	if err != nil {
+		return usageErr(err)
+	}
+	layout := conn.Layout()
+	ctx := context.Background()
+
+	man, err := manifest.Load(layout.ManifestPath())
+	if err != nil {
+		return runtimeErr(err)
+	}
+
+	srcDir := layout.Root
+	if c.From != "" {
+		srcDir = c.From
+	}
+	names, err := dirRoutines(srcDir, conn.Filter)
+	if err != nil {
+		return err
+	}
+
+	inst, err := store.List(ctx)
+	if err != nil {
+		return runtimeErr(err)
+	}
+	instTS := make(map[string]string, len(inst))
+	for _, r := range inst {
+		instTS[r.Name] = r.TS
+	}
+
+	var conflicts []string
+	for _, n := range names {
+		ts, exists := instTS[n]
+		if cf := manifest.CheckConflict(man, n, ts, exists); cf.Kind != manifest.ConflictNone {
+			conflicts = append(conflicts, fmt.Sprintf("%s (%s)", n, cf.Kind))
+		}
+	}
+	if len(conflicts) > 0 && !c.Force {
+		return clikit.Fail(clikit.ExitRefused, "CONFLICT",
+			fmt.Sprintf("%d routine(s) changed on the instance since pull: %s", len(conflicts), strings.Join(conflicts, ", ")),
+			"re-pull and merge, or pass --force to overwrite")
+	}
+
+	if conn.DryRun {
+		return cc.Result(syncPushResult{Pushed: nonNil(names), DryRun: true}, func() {
+			cc.Title("push plan (dry run)")
+			cc.KV([2]string{"to push", fmt.Sprint(len(names))}, [2]string{"from", srcDir})
+		})
+	}
+
+	if man == nil {
+		man = manifest.New()
+	}
+	var pushed []string
+	for _, n := range names {
+		raw, err := os.ReadFile(filepath.Join(srcDir, n))
+		if err != nil {
+			return runtimeErr(err)
+		}
+		canonical := mirror.Normalize(raw)
+		// Land it in the mirror too (so the mirror reflects what we pushed and
+		// verify stays coherent), then write it to the instance.
+		wr, err := mirror.WriteRoutine(layout.RoutinePath(n), canonical)
+		if err != nil {
+			return runtimeErr(err)
+		}
+		rt, err := store.Write(ctx, n, canonical)
+		if err != nil {
+			return runtimeErr(err)
+		}
+		man.Routines[n] = manifest.Entry{SourceTS: rt.TS, SHA256: wr.SHA256, Bytes: wr.Bytes}
+		pushed = append(pushed, n)
+	}
+	if err := manifest.Save(layout.ManifestPath(), man); err != nil {
+		return runtimeErr(err)
+	}
+
+	return cc.Result(syncPushResult{Pushed: nonNil(pushed)}, func() {
+		cc.Title("push complete")
+		cc.KV([2]string{"pushed", fmt.Sprint(len(pushed))}, [2]string{"from", srcDir})
+		fmt.Fprintln(cc.Stdout, cc.Success("instance updated (YottaDB compiles on next use)"))
+	})
+}
+
+// --- deploy ------------------------------------------------------------------
+
+type syncDeployCmd struct {
+	Dir   string `arg:"" help:"Directory of .m routine source to install."`
+	Prune bool   `help:"Remove instance routines under the library's common name-prefix that are absent from it (true sync)."`
+}
+
+type syncDeployResult struct {
+	Installed []string `json:"installed"`
+	Pruned    []string `json:"pruned"`
+	DryRun    bool     `json:"dryRun,omitempty"`
+}
+
+func (c *syncDeployCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	store, err := conn.SourceStore()
+	if err != nil {
+		return usageErr(err)
+	}
+	ctx := context.Background()
+
+	names, err := dirRoutines(c.Dir, conn.Filter)
+	if err != nil {
+		return err
+	}
+	if len(names) == 0 {
+		return usageErr(fmt.Errorf("no .m routines found in %s", c.Dir))
+	}
+
+	var prune []string
+	if c.Prune {
+		prefix := commonPrefix(bareNames(names))
+		if prefix == "" {
+			return clikit.Fail(clikit.ExitRefused, "PRUNE_SCOPE",
+				"cannot determine a safe prune scope: the library routines share no common name prefix",
+				"narrow the library or scope with --filter")
+		}
+		installed := make(map[string]bool, len(names))
+		for _, n := range names {
+			installed[n] = true
+		}
+		inst, err := store.List(ctx)
+		if err != nil {
+			return runtimeErr(err)
+		}
+		for _, r := range inst {
+			if installed[r.Name] || !strings.HasPrefix(source.BareName(r.Name), prefix) {
+				continue
+			}
+			ok, mErr := source.Match(r.Name, conn.Filter)
+			if mErr != nil {
+				return usageErr(mErr)
+			}
+			if ok {
+				prune = append(prune, r.Name)
+			}
+		}
+		sort.Strings(prune)
+	}
+
+	if conn.DryRun {
+		return cc.Result(syncDeployResult{Installed: nonNil(names), Pruned: nonNil(prune), DryRun: true}, func() {
+			cc.Title("deploy plan (dry run)")
+			cc.KV([2]string{"install", fmt.Sprint(len(names))}, [2]string{"prune", fmt.Sprint(len(prune))})
+		})
+	}
+
+	for _, n := range names {
+		raw, err := os.ReadFile(filepath.Join(c.Dir, n))
+		if err != nil {
+			return runtimeErr(err)
+		}
+		if _, err := store.Write(ctx, n, mirror.Normalize(raw)); err != nil {
+			return runtimeErr(err)
+		}
+	}
+	for _, n := range prune {
+		if err := store.Remove(ctx, n); err != nil {
+			return runtimeErr(err)
+		}
+	}
+
+	return cc.Result(syncDeployResult{Installed: nonNil(names), Pruned: nonNil(prune)}, func() {
+		cc.Title("deploy complete")
+		cc.KV([2]string{"installed", fmt.Sprint(len(names))}, [2]string{"pruned", fmt.Sprint(len(prune))})
+		fmt.Fprintln(cc.Stdout, cc.Success("library installed"))
+	})
+}
+
+// --- rm ----------------------------------------------------------------------
+
+type syncRmCmd struct {
+	Name string `arg:"" help:"Routine to remove (bare name or NAME.m)."`
+}
+
+type syncRmResult struct {
+	Removed []string `json:"removed"`
+	DryRun  bool     `json:"dryRun,omitempty"`
+}
+
+func (c *syncRmCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	store, err := conn.SourceStore()
+	if err != nil {
+		return usageErr(err)
+	}
+	name := routineFile(c.Name)
+	ctx := context.Background()
+
+	_, rerr := store.Read(ctx, name)
+	if rerr != nil && !os.IsNotExist(rerr) {
+		return runtimeErr(rerr)
+	}
+	exists := rerr == nil
+	var removed []string
+	if exists {
+		removed = []string{name}
+	}
+
+	if conn.DryRun {
+		return cc.Result(syncRmResult{Removed: nonNil(removed), DryRun: true}, func() {
+			cc.Title("rm plan (dry run)")
+			fmt.Fprintln(cc.Stdout, "  would remove "+strings.Join(nonNil(removed), ", "))
+		})
+	}
+
+	if exists {
+		if err := store.Remove(ctx, name); err != nil {
+			return runtimeErr(err)
+		}
+		layout := conn.Layout()
+		if err := os.Remove(layout.RoutinePath(name)); err != nil && !os.IsNotExist(err) {
+			return runtimeErr(err)
+		}
+		man, mErr := manifest.Load(layout.ManifestPath())
+		if mErr != nil {
+			return runtimeErr(mErr)
+		}
+		if man != nil {
+			if _, ok := man.Routines[name]; ok {
+				delete(man.Routines, name)
+				if err := manifest.Save(layout.ManifestPath(), man); err != nil {
+					return runtimeErr(err)
+				}
+			}
+		}
+	}
+
+	return cc.Result(syncRmResult{Removed: nonNil(removed)}, func() {
+		if len(removed) == 0 {
+			fmt.Fprintln(cc.Stdout, cc.Warning(name+": not present on the instance"))
+			return
+		}
+		fmt.Fprintln(cc.Stdout, cc.Success("removed "+name))
+	})
+}
+
 // --- shared helpers ----------------------------------------------------------
 
 // scopeSource lists the source routine names passing the bare-name filter,
@@ -345,6 +654,67 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// routineFile normalizes a routine argument to its filename: a bare "FOO"
+// becomes "FOO.m"; "FOO.m" is left as-is.
+func routineFile(name string) string {
+	if filepath.Ext(name) != ".m" {
+		return name + ".m"
+	}
+	return name
+}
+
+// dirRoutines lists the .m files in dir whose bare name passes the filter,
+// sorted. A missing directory is a usage error.
+func dirRoutines(dir, glob string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, usageErr(err)
+	}
+	var out []string
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || filepath.Ext(name) != ".m" {
+			continue
+		}
+		ok, mErr := source.Match(name, glob)
+		if mErr != nil {
+			return nil, usageErr(mErr)
+		}
+		if ok {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// bareNames strips the .m extension from each routine filename.
+func bareNames(names []string) []string {
+	out := make([]string, len(names))
+	for i, n := range names {
+		out[i] = source.BareName(n)
+	}
+	return out
+}
+
+// commonPrefix returns the longest common string prefix of the names (empty if
+// they share none) — the safety scope for deploy --prune.
+func commonPrefix(names []string) string {
+	if len(names) == 0 {
+		return ""
+	}
+	prefix := names[0]
+	for _, n := range names[1:] {
+		for !strings.HasPrefix(n, prefix) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
 }
 
 func runtimeErr(err error) error {

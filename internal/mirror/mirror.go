@@ -75,6 +75,11 @@ func HashFile(path string) (sum string, n int, err error) {
 	return hex.EncodeToString(h.Sum(nil)), int(written), nil
 }
 
+// Normalize is the exported form of the mirror's line-ending normalization, so
+// the push path can compute the canonical bytes it writes to both the mirror
+// and the instance (keeping their SHA-256 identical).
+func Normalize(content []byte) []byte { return normalize(content) }
+
 // normalize rewrites content to LF line endings with exactly one trailing
 // newline, stripping a trailing CR from each line.
 func normalize(content []byte) []byte {

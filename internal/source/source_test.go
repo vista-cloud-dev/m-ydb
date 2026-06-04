@@ -64,13 +64,56 @@ func TestFileStore_ListAndRead(t *testing.T) {
 	}
 }
 
+func TestFileStore_WriteAndRemove(t *testing.T) {
+	d0 := filepath.Join(t.TempDir(), "primary")
+	d1 := filepath.Join(t.TempDir(), "secondary")
+	writeFile(t, d1, "OLD.m", "OLD\n")
+	st := NewFileStore([]string{d0, d1})
+	ctx := context.Background()
+
+	// Write lands in the primary (first) dir and returns a non-empty TS.
+	rt, err := st.Write(ctx, "NEW.m", []byte("NEW ;body\n quit\n"))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if rt.Name != "NEW.m" || rt.TS == "" {
+		t.Errorf("write result = %+v", rt)
+	}
+	got, err := os.ReadFile(filepath.Join(d0, "NEW.m"))
+	if err != nil || string(got) != "NEW ;body\n quit\n" {
+		t.Fatalf("primary write = %q err=%v", got, err)
+	}
+
+	// Read resolves the freshly written routine.
+	if b, err := st.Read(ctx, "NEW.m"); err != nil || string(b) != "NEW ;body\n quit\n" {
+		t.Fatalf("read back = %q err=%v", b, err)
+	}
+
+	// Remove deletes from the primary dir.
+	writeFile(t, d0, "GONE.m", "GONE\n")
+	if err := st.Remove(ctx, "GONE.m"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(d0, "GONE.m")); !os.IsNotExist(err) {
+		t.Error("GONE.m still present after remove")
+	}
+	// Removing a name absent from the primary dir is a no-op (not an error).
+	if err := st.Remove(ctx, "OLD.m"); err != nil {
+		t.Errorf("remove of non-primary routine = %v, want nil (no-op)", err)
+	}
+}
+
 // fakeSh records the scripts it runs and replays canned stdout keyed by a
 // substring match, so ShellStore can be unit-tested without a container.
 type fakeSh struct {
 	responses []struct{ contains, stdout string }
+	capture   *string // if set, records the last script run
 }
 
 func (f *fakeSh) Sh(_ context.Context, script string) (string, int, error) {
+	if f.capture != nil {
+		*f.capture = script
+	}
 	for _, r := range f.responses {
 		if contains(script, r.contains) {
 			return r.stdout, 0, nil
@@ -126,6 +169,39 @@ func TestShellStore_Read(t *testing.T) {
 	}
 	if string(b) != "FOO ;body\n quit\n" {
 		t.Errorf("read = %q", b)
+	}
+}
+
+func TestShellStore_WriteEncodesAndReturnsTS(t *testing.T) {
+	var gotScript string
+	sh := &fakeSh{responses: []struct{ contains, stdout string }{
+		{"base64 -d", "1700000123\n"}, // write script ends by stat-ing the new file
+	}}
+	sh.capture = &gotScript
+	st := NewShellStore(sh, []string{"/data/r"})
+	rt, err := st.Write(context.Background(), "FOO.m", []byte("FOO\n quit\n"))
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if rt.Name != "FOO.m" || rt.TS != "1700000123" {
+		t.Errorf("write result = %+v, want {FOO.m 1700000123}", rt)
+	}
+	// Content must be base64-encoded into the script (no raw newlines / quoting hazards).
+	if !contains(gotScript, "base64 -d") || contains(gotScript, "FOO\n quit") {
+		t.Errorf("script did not base64-encode content: %q", gotScript)
+	}
+}
+
+func TestShellStore_Remove(t *testing.T) {
+	var gotScript string
+	sh := &fakeSh{}
+	sh.capture = &gotScript
+	st := NewShellStore(sh, []string{"/data/r"})
+	if err := st.Remove(context.Background(), "FOO.m"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if !contains(gotScript, "rm -f") || !contains(gotScript, "/data/r/FOO.m") {
+		t.Errorf("remove script = %q", gotScript)
 	}
 }
 

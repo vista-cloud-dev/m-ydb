@@ -70,3 +70,52 @@ func TestRealShellStore(t *testing.T) {
 	}
 	t.Logf("real ShellStore listed %d routines, read-back OK", len(names))
 }
+
+// TestRealShellStoreWrite exercises the docker-transport write path: Write
+// (base64 → container → stat), read-back, then Remove. Uses a scratch dir
+// inside the container; never touches the engine database.
+func TestRealShellStoreWrite(t *testing.T) {
+	if os.Getenv("M_YDB_IT") != "1" {
+		t.Skip("gated: set M_YDB_IT=1 (+ a running YottaDB container) to run the real-engine tier")
+	}
+	container := os.Getenv("M_YDB_CONTAINER")
+	if container == "" {
+		container = "m-test-engine"
+	}
+	sess := transport.NewSession(transport.Config{Transport: "docker", Container: container}, nil)
+	ctx := context.Background()
+
+	const dir = "/tmp/m-ydb-it-write"
+	if _, _, err := sess.Sh(ctx, `rm -rf '`+dir+`'; mkdir -p '`+dir+`'`); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	t.Cleanup(func() { _, _, _ = sess.Sh(ctx, `rm -rf '`+dir+`'`) })
+
+	st := NewShellStore(sess, []string{dir})
+
+	// Content with a tab + special chars must survive the base64 round-trip.
+	content := []byte("ZZTW ;written\n\tset x=1 ; \"quote\" & $char(10)\n quit\n")
+	rt, err := st.Write(ctx, "ZZTW.m", content)
+	if err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if rt.Name != "ZZTW.m" || rt.TS == "" {
+		t.Fatalf("write result = %+v", rt)
+	}
+
+	back, err := st.Read(ctx, "ZZTW.m")
+	if err != nil {
+		t.Fatalf("read back: %v", err)
+	}
+	if string(back) != string(content) {
+		t.Errorf("round-trip mismatch:\ngot  %q\nwant %q", back, content)
+	}
+
+	if err := st.Remove(ctx, "ZZTW.m"); err != nil {
+		t.Fatalf("remove: %v", err)
+	}
+	if _, err := st.Read(ctx, "ZZTW.m"); !os.IsNotExist(err) {
+		t.Errorf("after remove, read err = %v, want IsNotExist", err)
+	}
+	t.Logf("real ShellStore write/read/remove round-trip OK (ts=%s)", rt.TS)
+}

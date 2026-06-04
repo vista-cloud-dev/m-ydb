@@ -27,10 +27,9 @@ func Caps() mdriver.Caps {
 			// M0 meta + M1a info/doctor; M1a lifecycle health surface.
 			Meta:      []string{"caps", "info", "version", "schema", "doctor"},
 			Lifecycle: []string{"up", "down", "restart", "status", "wait", "provision", "destroy"},
-			// M2 read side: list/pull/status/verify. The write verbs
-			// (push/deploy/diff/rm) land with the next slice — advertise only
-			// what is wired.
-			Sync: []string{"list", "pull", "status", "verify"},
+			// M2 sync (full axis): read (list/pull/status/verify) + write
+			// (diff/push/deploy/rm). Order matches driver-contract §4.
+			Sync: []string{"list", "pull", "status", "verify", "diff", "push", "deploy", "rm"},
 		},
 		Features: mdriver.Features{
 			Remote:          false, // YottaDB has no network API
