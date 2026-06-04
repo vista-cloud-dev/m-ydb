@@ -32,6 +32,12 @@ lint:
 test:
 	go test $(GOFLAGS) -race -cover ./...
 
+# Real-engine integration tier (gated). Needs a running YottaDB container.
+# CONTAINER defaults to the shared dev engine m-test-engine.
+CONTAINER ?= m-test-engine
+test-it:
+	M_YDB_IT=1 M_YDB_CONTAINER=$(CONTAINER) go test $(GOFLAGS) -count=1 -run RealHealth ./internal/transport/ -v
+
 tidy:
 	go mod tidy
 
