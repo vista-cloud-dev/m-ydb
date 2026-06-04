@@ -52,8 +52,8 @@ github.com/stretchr/objx v0.1.0/go.mod h1:HFkY916IF+rwdDfMAkV7OtwuqBVzrE8GR6GFx+
 github.com/stretchr/testify v1.4.0/go.mod h1:j7eGeouHqKxXV5pUuKE4zz7dFj8WfuZ+81PSLYec5m4=
 github.com/stretchr/testify v1.8.4 h1:CcVxjf3Q8PM0mHUKJCdn+eZZtm5yQwehR5yeSVQQcUk=
 github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXlSw2iwfAo=
-github.com/vista-cloud-dev/m-driver-sdk v0.0.0-20260604101652-4f3e82636f2e h1:l/tIoLWa9sJzLADG6EDoiwBYT1vuwgHa/M6kclx1uYQ=
-github.com/vista-cloud-dev/m-driver-sdk v0.0.0-20260604101652-4f3e82636f2e/go.mod h1:0Qkz38Qhgyr5nYQeqgthkMHt4zVJMN3j79Kfr+THtpw=
+github.com/vista-cloud-dev/m-driver-sdk v0.1.0 h1:2iCneXr4opmyuGhySJ1CSyCuoHO48NtC5mHkGsae1Kk=
+github.com/vista-cloud-dev/m-driver-sdk v0.1.0/go.mod h1:0Qkz38Qhgyr5nYQeqgthkMHt4zVJMN3j79Kfr+THtpw=
 github.com/willabides/kongplete v0.4.0 h1:eivXxkp5ud5+4+NVN9e4goxC5mSh3n1RHov+gsblM2g=
 github.com/willabides/kongplete v0.4.0/go.mod h1:0P0jtWD9aTsqPSUAl4de35DLghrr57XcayPyvqSi2X8=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=
