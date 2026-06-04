@@ -30,9 +30,9 @@ func Caps() mdriver.Caps {
 			// M2 sync (full axis): read (list/pull/status/verify) + write
 			// (diff/push/deploy/rm). Order matches driver-contract §4.
 			Sync: []string{"list", "pull", "status", "verify", "diff", "push", "deploy", "rm"},
-			// M3 exec: run/eval wired (engineError from $ZSTATUS); load/abort
-			// land with the next slice — advertise only what is wired.
-			Exec: []string{"run", "eval"},
+			// M3 exec (full axis): load/run/eval/abort. engineError comes from
+			// $ZSTATUS (runtime, via $ETRAP) and the compiler listing (compile).
+			Exec: []string{"load", "run", "eval", "abort"},
 		},
 		Features: mdriver.Features{
 			Remote:          false, // YottaDB has no network API
