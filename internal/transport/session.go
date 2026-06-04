@@ -170,18 +170,32 @@ func (s *Session) SetGlobal(context.Context, string, string) error {
 }
 
 // Util runs a YottaDB utility (yottadb, mupip, gde, lke, dse) with the given
-// args, wrapped for the active transport. It is NOT part of the neutral
-// Transport contract — these binaries are YottaDB-specific — so it lives on the
-// concrete Session for lifecycle/admin/native use within m-ydb. Locally the
-// binary resolves to $ydb_dist/<name>; under docker it runs in the container.
-func (s *Session) Util(ctx context.Context, name string, args []string) (CmdOutput, error) {
+// args and optional stdin (GDE reads its layout script from stdin), wrapped for
+// the active transport. It is NOT part of the neutral Transport contract — these
+// binaries are YottaDB-specific — so it lives on the concrete Session for
+// lifecycle/admin/native use within m-ydb. Locally the binary resolves to
+// $ydb_dist/<name>; under docker it runs in the container.
+func (s *Session) Util(ctx context.Context, name string, args []string, stdin string) (CmdOutput, error) {
 	bin := name
 	if !s.isDocker() && s.cfg.Dist != "" {
 		bin = filepath.Join(s.cfg.Dist, name)
 	}
 	argv := append([]string{bin}, args...)
-	return s.run(ctx, s.wrap(argv), s.env(), "")
+	return s.run(ctx, s.wrap(argv), s.env(), stdin)
 }
+
+// Docker runs a host `docker` command (e.g. start/stop/rm/run) for managing the
+// container itself — distinct from `docker exec` (which Util/Exec use to run
+// inside it). It is docker-transport-only.
+func (s *Session) Docker(ctx context.Context, args ...string) (CmdOutput, error) {
+	return s.run(ctx, append([]string{"docker"}, args...), nil, "")
+}
+
+// Container is the docker container name for this session (empty for local).
+func (s *Session) Container() string { return s.cfg.Container }
+
+// IsDocker reports whether this is the docker transport.
+func (s *Session) IsDocker() bool { return s.isDocker() }
 
 var releaseRe = regexp.MustCompile(`r\d+\.\d+`)
 
@@ -189,7 +203,7 @@ var releaseRe = regexp.MustCompile(`r\d+\.\d+`)
 // It is the engine-version probe for status/info/doctor (the SDK Health probe
 // stays a bare readiness check).
 func (s *Session) Version(ctx context.Context) (string, error) {
-	out, err := s.Util(ctx, "yottadb", []string{"-version"})
+	out, err := s.Util(ctx, "yottadb", []string{"-version"}, "")
 	if err != nil {
 		return "", err
 	}

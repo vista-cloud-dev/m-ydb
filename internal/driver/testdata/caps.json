@@ -7,8 +7,13 @@
   ],
   "axes": {
     "lifecycle": [
+      "up",
+      "down",
+      "restart",
       "status",
-      "wait"
+      "wait",
+      "provision",
+      "destroy"
     ],
     "meta": [
       "caps",

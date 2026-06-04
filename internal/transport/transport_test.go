@@ -15,16 +15,32 @@ var _ mdriver.Transport = (*Session)(nil)
 // recordingRunner captures the last argv/env/stdin and returns canned output,
 // so the session strategy's command construction is verified without a real
 // engine (the in-strategy seam, distinct from the verb-level Transport).
-type recordingRunner struct {
-	out  CmdOutput
-	err  error
+type recordedCall struct {
 	argv []string
 	env  []string
 	in   string
 }
 
+type recordingRunner struct {
+	out   CmdOutput
+	err   error
+	argv  []string // last call (convenience for single-call tests)
+	env   []string
+	in    string
+	calls []recordedCall // every call, in order (for multi-step ops)
+	// outs, when non-nil, supplies a per-call CmdOutput in sequence (else out).
+	outs []CmdOutput
+}
+
 func (r *recordingRunner) run(_ context.Context, argv, env []string, stdin string) (CmdOutput, error) {
 	r.argv, r.env, r.in = argv, env, stdin
+	r.calls = append(r.calls, recordedCall{argv: argv, env: env, in: stdin})
+	if r.outs != nil {
+		i := len(r.calls) - 1
+		if i < len(r.outs) {
+			return r.outs[i], r.err
+		}
+	}
 	return r.out, r.err
 }
 
@@ -121,7 +137,7 @@ func TestLocal_Util_Argv(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
 	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb", GblDir: "/data/m.gld"}, rr.run)
 
-	if _, err := s.Util(context.Background(), "mupip", []string{"rundown", "-region", "*"}); err != nil {
+	if _, err := s.Util(context.Background(), "mupip", []string{"rundown", "-region", "*"}, ""); err != nil {
 		t.Fatalf("util: %v", err)
 	}
 	// A YDB utility resolves to $ydb_dist/<util> locally and carries the env.
@@ -132,14 +148,40 @@ func TestLocal_Util_Argv(t *testing.T) {
 	assertEnv(t, rr.env, "ydb_dist=/opt/yottadb", "ydb_gbldir=/data/m.gld")
 }
 
+func TestUtil_FeedsStdin(t *testing.T) {
+	rr := &recordingRunner{}
+	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb"}, rr.run)
+	if _, err := s.Util(context.Background(), "gde", nil, "change -segment DEFAULT -file=m.dat\nexit\n"); err != nil {
+		t.Fatalf("util: %v", err)
+	}
+	if rr.argv[0] != "/opt/yottadb/gde" {
+		t.Errorf("argv0 = %q, want /opt/yottadb/gde", rr.argv[0])
+	}
+	if rr.in != "change -segment DEFAULT -file=m.dat\nexit\n" {
+		t.Errorf("gde stdin = %q", rr.in)
+	}
+}
+
 func TestDocker_Util_Argv(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
 	s := NewSession(Config{Transport: "docker", Container: "m-test-engine"}, rr.run)
 
-	if _, err := s.Util(context.Background(), "gde", nil); err != nil {
+	if _, err := s.Util(context.Background(), "gde", nil, ""); err != nil {
 		t.Fatalf("util: %v", err)
 	}
 	want := []string{"docker", "exec", "-i", "m-test-engine", "gde"}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv = %v, want %v", rr.argv, want)
+	}
+}
+
+func TestDocker_HostCommand(t *testing.T) {
+	rr := &recordingRunner{}
+	s := NewSession(Config{Transport: "docker", Container: "m-test-engine"}, rr.run)
+	if _, err := s.Docker(context.Background(), "stop", "m-test-engine"); err != nil {
+		t.Fatalf("docker: %v", err)
+	}
+	want := []string{"docker", "stop", "m-test-engine"}
 	if !reflect.DeepEqual(rr.argv, want) {
 		t.Errorf("argv = %v, want %v", rr.argv, want)
 	}

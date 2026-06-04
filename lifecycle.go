@@ -8,6 +8,7 @@ import (
 	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 	"github.com/vista-cloud-dev/m-ydb/clikit"
 	"github.com/vista-cloud-dev/m-ydb/internal/config"
+	"github.com/vista-cloud-dev/m-ydb/internal/transport"
 )
 
 // lifecycleCmd is the lifecycle axis (driver-contract §5.1): manage the engine
@@ -17,13 +18,116 @@ import (
 // (status/--probe + wait); the mupip/gde lifecycle (up/down/restart/provision/
 // destroy) lands in M1b, and caps grows to advertise it then.
 type lifecycleCmd struct {
-	Status lifeStatusCmd `cmd:"" help:"Report running/healthy/version; --probe for a terse CI readiness gate."`
-	Wait   lifeWaitCmd   `cmd:"" help:"Block until the engine is healthy or --timeout elapses (exit 6 on timeout)."`
+	Up        lifeUpCmd        `cmd:"" help:"Bring the engine up: ensure .gld/.dat + clear stale shared memory (local); start the container (docker)."`
+	Down      lifeDownCmd      `cmd:"" help:"Take the engine down: mupip rundown (local); stop the container (docker)."`
+	Restart   lifeRestartCmd   `cmd:"" help:"Restart: down then up."`
+	Status    lifeStatusCmd    `cmd:"" help:"Report running/healthy/version; --probe for a terse CI readiness gate."`
+	Wait      lifeWaitCmd      `cmd:"" help:"Block until the engine is healthy or --timeout elapses (exit 6 on timeout)."`
+	Provision lifeProvisionCmd `cmd:"" help:"Create the instance: GDE layout + mupip create (local); docker run (docker)."`
+	Destroy   lifeDestroyCmd   `cmd:"" help:"Remove the instance: delete .gld/.dat (local); docker rm -f (docker)."`
 }
 
 // The lifecycle status/state payloads are SDK-owned so m-ydb and m-iris emit
 // identical JSON m-cli reads.
-type lifecycleStatus = mdriver.Status
+type (
+	lifecycleStatus = mdriver.Status
+	lifeStateResult = mdriver.StateResult
+)
+
+// renderState emits a StateResult envelope with a one-line human summary.
+func renderState(cc *clikit.Context, st lifeStateResult) error {
+	return cc.Result(st, func() {
+		line := "state: " + st.State
+		if st.Endpoint != "" {
+			line += " (" + st.Endpoint + ")"
+		}
+		fmt.Fprintln(cc.Stdout, cc.Success(line))
+	})
+}
+
+// session validates + resolves the connection and builds the engine session.
+func session(conn *config.Conn) (*transport.Session, error) {
+	if err := conn.Validate(); err != nil {
+		return nil, clikit.Fail(clikit.ExitUsage, "BAD_CONN", err.Error(), "")
+	}
+	return conn.NewSession(), nil
+}
+
+// --- lifecycle up / down / restart ------------------------------------------
+
+type lifeUpCmd struct{}
+
+func (lifeUpCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	s, err := session(conn)
+	if err != nil {
+		return err
+	}
+	st, err := s.Up(context.Background())
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "UP_FAILED", err.Error(), "run `m-ydb meta doctor`")
+	}
+	return renderState(cc, st)
+}
+
+type lifeDownCmd struct{}
+
+func (lifeDownCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	s, err := session(conn)
+	if err != nil {
+		return err
+	}
+	st, err := s.Down(context.Background())
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "DOWN_FAILED", err.Error(), "")
+	}
+	return renderState(cc, st)
+}
+
+type lifeRestartCmd struct{}
+
+func (lifeRestartCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	s, err := session(conn)
+	if err != nil {
+		return err
+	}
+	st, err := s.Restart(context.Background())
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "RESTART_FAILED", err.Error(), "")
+	}
+	return renderState(cc, st)
+}
+
+// --- lifecycle provision / destroy ------------------------------------------
+
+type lifeProvisionCmd struct {
+	Image string `help:"docker transport: image to run for the new container." placeholder:"IMAGE"`
+}
+
+func (c lifeProvisionCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	if err := conn.Validate(); err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_CONN", err.Error(), "")
+	}
+	st, err := conn.NewSession().Provision(context.Background(), transport.ProvisionOpts{Image: c.Image})
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "PROVISION_FAILED", err.Error(), "")
+	}
+	return renderState(cc, st)
+}
+
+type lifeDestroyCmd struct {
+	Force bool `help:"Proceed without confirmation (drivers never prompt; accepted for symmetry)."`
+}
+
+func (c lifeDestroyCmd) Run(cc *clikit.Context, conn *config.Conn) error {
+	if err := conn.Validate(); err != nil {
+		return clikit.Fail(clikit.ExitUsage, "BAD_CONN", err.Error(), "")
+	}
+	st, err := conn.NewSession().Destroy(context.Background())
+	if err != nil {
+		return clikit.Fail(clikit.ExitRuntime, "DESTROY_FAILED", err.Error(), "")
+	}
+	return renderState(cc, st)
+}
 
 // probe runs the readiness probe and builds the status snapshot. A transport
 // launch failure (e.g. missing binary) is reported as not-running rather than a

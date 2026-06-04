@@ -26,7 +26,7 @@ func Caps() mdriver.Caps {
 			// Only the verbs actually wired; grows per milestone.
 			// M0 meta + M1a info/doctor; M1a lifecycle health surface.
 			Meta:      []string{"caps", "info", "version", "schema", "doctor"},
-			Lifecycle: []string{"status", "wait"},
+			Lifecycle: []string{"up", "down", "restart", "status", "wait", "provision", "destroy"},
 		},
 		Features: mdriver.Features{
 			Remote:          false, // YottaDB has no network API
