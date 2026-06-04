@@ -25,6 +25,10 @@
       "deploy",
       "rm"
     ],
+    "exec": [
+      "run",
+      "eval"
+    ],
     "meta": [
       "caps",
       "info",
