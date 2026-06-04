@@ -36,7 +36,7 @@ test:
 # CONTAINER defaults to the shared dev engine m-test-engine.
 CONTAINER ?= m-test-engine
 test-it:
-	M_YDB_IT=1 M_YDB_CONTAINER=$(CONTAINER) go test $(GOFLAGS) -count=1 -run RealHealth ./internal/transport/ -v
+	M_YDB_IT=1 M_YDB_CONTAINER=$(CONTAINER) go test $(GOFLAGS) -count=1 -run Real ./internal/transport/ ./internal/source/ -v
 
 tidy:
 	go mod tidy

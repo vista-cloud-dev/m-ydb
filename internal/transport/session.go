@@ -184,6 +184,20 @@ func (s *Session) Util(ctx context.Context, name string, args []string, stdin st
 	return s.run(ctx, s.wrap(argv), s.env(), stdin)
 }
 
+// Sh runs a /bin/sh -c script in the engine's filesystem context — on the host
+// for local, inside the container for docker — and returns stdout + the exit
+// code (a non-zero exit is a result, not an error). It is the seam the sync
+// source store uses to list/read .m files under the docker transport; it is not
+// part of the neutral Transport contract. The script must be self-contained
+// (the caller quotes any interpolated paths).
+func (s *Session) Sh(ctx context.Context, script string) (stdout string, code int, err error) {
+	out, err := s.run(ctx, s.wrap([]string{"sh", "-c", script}), s.env(), "")
+	if err != nil {
+		return "", 0, err
+	}
+	return out.Stdout, out.Code, nil
+}
+
 // Docker runs a host `docker` command (e.g. start/stop/rm/run) for managing the
 // container itself — distinct from `docker exec` (which Util/Exec use to run
 // inside it). It is docker-transport-only.

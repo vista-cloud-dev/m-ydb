@@ -15,6 +15,12 @@
       "provision",
       "destroy"
     ],
+    "sync": [
+      "list",
+      "pull",
+      "status",
+      "verify"
+    ],
     "meta": [
       "caps",
       "info",

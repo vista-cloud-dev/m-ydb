@@ -13,10 +13,14 @@
 //	m-ydb meta doctor      typed preflight diagnostics (exit 0/5/6)
 //	m-ydb lifecycle status report running/healthy/version; --probe for CI gating
 //	m-ydb lifecycle wait   block until healthy or --timeout (exit 6)
+//	m-ydb sync list        inventory routine source ($ydb_routines)
+//	m-ydb sync pull        source → mirror, incremental via the manifest
+//	m-ydb sync status      source vs. local manifest drift (exit 3 on drift)
+//	m-ydb sync verify      re-hash mirror files against the manifest (exit 3)
 //
-// Later milestones add the rest of lifecycle (up/down/restart/provision/destroy)
-// and the sync, exec, data, cover, admin, and native axes; caps grows to
-// advertise each as it lands (caps is honest — advertised == implemented).
+// Later milestones add the sync write verbs (push/deploy/diff/rm) and the exec,
+// data, cover, admin, and native axes; caps grows to advertise each as it lands
+// (caps is honest — advertised == implemented).
 //
 // Connection config comes from flags or M_YDB_* env (flags win), with unset
 // paths falling back to the standard ydb_*/gtm_* env; see internal/config.
@@ -43,6 +47,7 @@ type CLI struct {
 
 	Meta      metaCmd      `cmd:"" help:"Introspection + power tools: caps / info / version / schema / doctor."`
 	Lifecycle lifecycleCmd `cmd:"" help:"Manage the engine instance: status / wait (up/down/restart/provision/destroy land in M1b)."`
+	Sync      syncCmd      `cmd:"" help:"Source axis: routine source ↔ instance (list / pull / status / verify; push/deploy/diff/rm land next)."`
 
 	InstallCompletions kongplete.InstallCompletions `cmd:"" help:"Install shell tab-completions."`
 }
