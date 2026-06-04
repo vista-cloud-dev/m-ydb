@@ -6,12 +6,12 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/vista-cloud-dev/m-ydb/internal/contract"
+	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )
 
-// TestCaps_GoldenJSON pins the m-ydb capability document (contract §4): the
-// exact axes/verbs, the two supported transports, and the feature flags. The
-// golden file is the byte-for-byte contract m-cli reads via `caps`.
+// TestCaps_GoldenJSON pins the m-ydb capability document (driver-contract.md §4):
+// the wired axes/verbs, the two supported transports, and the feature flags. The
+// golden file is the byte-for-byte contract m-cli reads via `meta caps`.
 func TestCaps_GoldenJSON(t *testing.T) {
 	got, err := json.MarshalIndent(Caps(), "", "  ")
 	if err != nil {
@@ -34,37 +34,41 @@ func TestCaps_GoldenJSON(t *testing.T) {
 	}
 }
 
-// TestCaps_Invariants asserts the contract-level invariants independently of
-// the golden bytes, so a wrong golden can't mask a real regression.
+// TestCaps_Invariants asserts contract-level invariants independently of the
+// golden bytes, so a wrong golden can't mask a real regression.
 func TestCaps_Invariants(t *testing.T) {
 	c := Caps()
 	if c.Engine != "ydb" {
 		t.Errorf("engine = %q, want ydb", c.Engine)
 	}
-	if c.Contract != contract.Version {
-		t.Errorf("contract = %q, want %q", c.Contract, contract.Version)
+	if c.Contract != mdriver.ContractVersion {
+		t.Errorf("contract = %q, want %q", c.Contract, mdriver.ContractVersion)
 	}
 	if want := []string{"local", "docker"}; !equal(c.Transports, want) {
 		t.Errorf("transports = %v, want %v", c.Transports, want)
 	}
-	// YottaDB has no network API — remote must never be advertised (risk: caps honesty).
+	// YottaDB has no network API — remote must never be advertised.
 	if c.Features.Remote {
 		t.Error("features.remote must be false for YottaDB")
 	}
 	for _, tr := range c.Transports {
-		if tr == contract.TransportRemote {
+		if tr == mdriver.TransportRemote {
 			t.Errorf("transports advertise %q, which YottaDB does not support", tr)
 		}
 	}
-	// Every advertised axis must be non-empty (caps honesty: no empty axis).
-	axes := map[string][]string{
+	// Honest caps: every advertised (non-nil) axis must be non-empty — never
+	// advertise an axis with no verbs.
+	for name, verbs := range map[string][]string{
 		"lifecycle": c.Axes.Lifecycle, "sync": c.Axes.Sync, "exec": c.Axes.Exec,
 		"data": c.Axes.Data, "cover": c.Axes.Cover, "admin": c.Axes.Admin, "meta": c.Axes.Meta,
-	}
-	for name, verbs := range axes {
-		if len(verbs) == 0 {
-			t.Errorf("axis %q has no verbs", name)
+	} {
+		if verbs != nil && len(verbs) == 0 {
+			t.Errorf("axis %q is advertised but empty", name)
 		}
+	}
+	// meta is always wired: caps must list itself and version.
+	if !contains(c.Axes.Meta, "caps") || !contains(c.Axes.Meta, "version") {
+		t.Errorf("meta axis = %v, must include caps and version", c.Axes.Meta)
 	}
 }
 
@@ -78,4 +82,13 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+func contains(s []string, v string) bool {
+	for _, x := range s {
+		if x == v {
+			return true
+		}
+	}
+	return false
 }

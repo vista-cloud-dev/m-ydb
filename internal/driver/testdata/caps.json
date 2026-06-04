@@ -6,62 +6,16 @@
     "docker"
   ],
   "axes": {
-    "lifecycle": [
-      "up",
-      "down",
-      "restart",
-      "status",
-      "logs",
-      "provision",
-      "destroy",
-      "wait"
-    ],
-    "sync": [
-      "list",
-      "pull",
-      "status",
-      "verify",
-      "push",
-      "deploy",
-      "diff",
-      "rm"
-    ],
-    "exec": [
-      "load",
-      "run",
-      "eval",
-      "abort"
-    ],
-    "data": [
-      "get",
-      "set",
-      "kill",
-      "query",
-      "export",
-      "import"
-    ],
-    "cover": [
-      "trace"
-    ],
-    "admin": [
-      "backup",
-      "restore",
-      "check",
-      "journal"
-    ],
     "meta": [
       "caps",
       "version",
-      "info",
-      "doctor",
-      "selftest",
-      "native"
+      "schema"
     ]
   },
   "features": {
     "remote": false,
     "prune": true,
     "ephemeralPrefix": true,
-    "snapshot": true
+    "snapshot": false
   }
 }

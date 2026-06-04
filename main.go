@@ -61,15 +61,12 @@ func (capsCmd) Run(cc *clikit.Context) error {
 			[2]string{"transports", strings.Join(c.Transports, ", ")},
 		)
 		cc.Rule("axes")
-		cc.KV(
-			[2]string{"lifecycle", strings.Join(c.Axes.Lifecycle, " ")},
-			[2]string{"sync", strings.Join(c.Axes.Sync, " ")},
-			[2]string{"exec", strings.Join(c.Axes.Exec, " ")},
-			[2]string{"data", strings.Join(c.Axes.Data, " ")},
-			[2]string{"cover", strings.Join(c.Axes.Cover, " ")},
-			[2]string{"admin", strings.Join(c.Axes.Admin, " ")},
-			[2]string{"meta", strings.Join(c.Axes.Meta, " ")},
-		)
+		// Only the wired (non-empty) axes are advertised; show just those.
+		var axes [][2]string
+		for _, a := range c.Axes.Wired() {
+			axes = append(axes, [2]string{a.Name, strings.Join(a.Verbs, " ")})
+		}
+		cc.KV(axes...)
 	})
 }
 

@@ -1,35 +1,37 @@
 // Package driver holds the m-ydb vendor logic: the YottaDB-specific realization
-// of the neutral engine-driver contract (driver-contract.md v1.0). It depends on
-// the contract shapes (internal/contract) but knows nothing of m-cli.
+// of the neutral engine-driver contract. It depends on the shared SDK
+// (github.com/vista-cloud-dev/m-driver-sdk) for the contract shapes and the
+// verb-level Transport, and knows nothing of m-cli.
 package driver
 
-import "github.com/vista-cloud-dev/m-ydb/internal/contract"
+import mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 
-// Caps returns the m-ydb capability document (contract §4).
+// Caps returns the m-ydb capability document (driver-contract.md §4).
 //
-// YottaDB is daemonless and file-based, so it supports only the local and docker
-// transports — there is no network API, hence features.remote is false. The
-// advertised axes/verbs are the driver's target surface; conformance (M8) gates
-// that every advertised verb is actually implemented (caps honesty, contract §9).
-func Caps() contract.Caps {
-	return contract.Caps{
+// It is HONEST by construction (conformance enforces advertised == implemented):
+// it advertises only the axes/verbs wired in this build and grows milestone by
+// milestone — M1 lifecycle, M2 sync, M3 exec, M4 data, M5 cover, M6 admin, M7
+// native (info/doctor/selftest land with M1). Do not list a verb here before its
+// command exists.
+//
+// YottaDB is daemonless and file-based, so only the local and docker transports
+// are supported (no network API → features.remote = false). The transport seam
+// exists, so both are advertised up-front.
+func Caps() mdriver.Caps {
+	return mdriver.Caps{
 		Engine:     "ydb",
-		Contract:   contract.Version,
-		Transports: []string{contract.TransportLocal, contract.TransportDocker},
-		Axes: contract.Axes{
-			Lifecycle: []string{"up", "down", "restart", "status", "logs", "provision", "destroy", "wait"},
-			Sync:      []string{"list", "pull", "status", "verify", "push", "deploy", "diff", "rm"},
-			Exec:      []string{"load", "run", "eval", "abort"},
-			Data:      []string{"get", "set", "kill", "query", "export", "import"},
-			Cover:     []string{"trace"},
-			Admin:     []string{"backup", "restore", "check", "journal"},
-			Meta:      []string{"caps", "version", "info", "doctor", "selftest", "native"},
+		Contract:   mdriver.ContractVersion,
+		Transports: []string{mdriver.TransportLocal, mdriver.TransportDocker},
+		Axes: mdriver.Axes{
+			// M0 — meta only (the verbs actually wired). The rest are added as
+			// each milestone lands.
+			Meta: []string{"caps", "version", "schema"},
 		},
-		Features: contract.Features{
-			Remote:          false,
-			Prune:           true,
-			EphemeralPrefix: true,
-			Snapshot:        true,
+		Features: mdriver.Features{
+			Remote:          false, // YottaDB has no network API
+			Prune:           true,  // sync deploy --prune true-sync (M2)
+			EphemeralPrefix: true,  // exec --prefix zzt<runid> staging (M3)
+			Snapshot:        false, // lifecycle snapshot/rollback — roadmap §10, not yet
 		},
 	}
 }

@@ -1,3 +1,8 @@
+// Package transport holds m-ydb's YottaDB-specific Transport strategies. The
+// verb-level seam itself (the Transport interface and its request/result types)
+// lives in the shared SDK (github.com/vista-cloud-dev/m-driver-sdk); this
+// package implements it for the local and docker transports by piping M into a
+// `yottadb` session and capturing stdout.
 package transport
 
 import (
@@ -8,11 +13,17 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )
 
+// Session implements mdriver.Transport for local and docker. The docker variant
+// wraps the same yottadb argv in `docker exec`.
+var _ mdriver.Transport = (*Session)(nil)
+
 // ErrNotImplemented marks a Transport verb whose milestone has not landed yet.
-// The interface is frozen at M0; the local/docker bodies fill in per milestone
-// (Load/Compile → M2/M3, ReadGlobal → M4).
+// The interface is frozen in the SDK; the YottaDB bodies fill in per milestone
+// (Load → M2/M3, ReadGlobal/SetGlobal → M4).
 var ErrNotImplemented = errors.New("transport: verb not yet implemented")
 
 // Config is the resolved connection for a session transport. For docker only
@@ -39,8 +50,7 @@ type CmdOutput struct {
 // construction without a real engine; production uses osRun.
 type runFunc func(ctx context.Context, argv, env []string, stdin string) (CmdOutput, error)
 
-// Session is the local/docker Transport: it pipes M into a `yottadb` session
-// and captures stdout. The docker variant wraps the same argv in `docker exec`.
+// Session is the local/docker Transport.
 type Session struct {
 	cfg Config
 	run runFunc
@@ -54,7 +64,7 @@ func NewSession(cfg Config, run runFunc) *Session {
 	return &Session{cfg: cfg, run: run}
 }
 
-func (s *Session) isDocker() bool { return s.cfg.Transport == "docker" }
+func (s *Session) isDocker() bool { return s.cfg.Transport == mdriver.TransportDocker }
 
 // yottabin resolves the yottadb invocation: the container's PATH binary under
 // docker, or $ydb_dist/yottadb locally (bare "yottadb" if Dist is unset).
@@ -95,14 +105,13 @@ func (s *Session) wrap(argv []string) []string {
 	return argv
 }
 
-// buildExec turns an ExecRequest into a yottadb argv + stdin.
-func (s *Session) buildExec(req ExecRequest) (argv []string, stdin string) {
+// buildExec turns an ExecRequest into a yottadb argv + stdin. The shape is
+// selected by which field is set, with precedence Script > EntryRef > Command
+// (mdriver.ExecRequest).
+func (s *Session) buildExec(req mdriver.ExecRequest) (argv []string, stdin string) {
 	bin := s.yottabin()
-	switch req.Mode {
-	case ExecRoutine:
-		argv = append([]string{bin, "-run", req.EntryRef}, req.Args...)
-		stdin = req.Stdin
-	case ExecScript:
+	switch {
+	case req.Script != "":
 		// Direct mode reads the script from stdin and MUST end with halt, else
 		// the session hangs waiting for input.
 		stdin = req.Script
@@ -111,7 +120,10 @@ func (s *Session) buildExec(req ExecRequest) (argv []string, stdin string) {
 		}
 		stdin += "halt\n"
 		argv = []string{bin, "-direct"}
-	default: // ExecCommand
+	case req.EntryRef != "":
+		argv = append([]string{bin, "-run", req.EntryRef}, req.Args...)
+		stdin = req.Stdin
+	default:
 		argv = []string{bin, "-run", "%XCMD", req.Command}
 		stdin = req.Stdin
 	}
@@ -120,39 +132,39 @@ func (s *Session) buildExec(req ExecRequest) (argv []string, stdin string) {
 
 // Exec runs an M command/entryref/script. A non-zero engine exit is a result,
 // not a transport error; $ZSTATUS-driven engineError parsing lands in M3.
-func (s *Session) Exec(ctx context.Context, req ExecRequest) (ExecResult, error) {
+func (s *Session) Exec(ctx context.Context, req mdriver.ExecRequest) (mdriver.ExecResult, error) {
 	argv, stdin := s.buildExec(req)
 	out, err := s.run(ctx, s.wrap(argv), s.env(), stdin)
 	if err != nil {
-		return ExecResult{}, err
+		return mdriver.ExecResult{}, err
 	}
-	return ExecResult{Stdout: out.Stdout, Status: out.Code}, nil
+	return mdriver.ExecResult{Stdout: out.Stdout, Status: out.Code}, nil
 }
 
 // Health runs the readiness probe `%XCMD 'write 1'` and reports ready when the
 // engine echoes "1" (plan §3). Engine-version probing is added in M1.
-func (s *Session) Health(ctx context.Context) (HealthResult, error) {
-	res, err := s.Exec(ctx, ExecRequest{Mode: ExecCommand, Command: "write 1"})
+func (s *Session) Health(ctx context.Context) (mdriver.Health, error) {
+	res, err := s.Exec(ctx, mdriver.ExecRequest{Command: "write 1"})
 	if err != nil {
-		return HealthResult{}, err
+		return mdriver.Health{}, err
 	}
 	ready := strings.TrimSpace(res.Stdout) == "1"
-	return HealthResult{Running: ready, Healthy: ready}, nil
+	return mdriver.Health{Running: ready, Healthy: ready}, nil
 }
 
 // Load — staging + compile lands in M2/M3.
-func (s *Session) Load(context.Context, LoadRequest) (LoadResult, error) {
-	return LoadResult{}, ErrNotImplemented
-}
-
-// Compile — explicit recompile lands in M3.
-func (s *Session) Compile(context.Context, CompileRequest) (CompileResult, error) {
-	return CompileResult{}, ErrNotImplemented
+func (s *Session) Load(context.Context, mdriver.LoadRequest) (mdriver.LoadResult, error) {
+	return mdriver.LoadResult{}, ErrNotImplemented
 }
 
 // ReadGlobal — global read-back lands in M4 (and powers the M5 coverage read).
-func (s *Session) ReadGlobal(context.Context, GlobalRef) (GlobalResult, error) {
-	return GlobalResult{}, ErrNotImplemented
+func (s *Session) ReadGlobal(context.Context, mdriver.GlobalRef) (mdriver.GlobalNode, error) {
+	return mdriver.GlobalNode{}, ErrNotImplemented
+}
+
+// SetGlobal — global write (fixture seeding) lands in M4.
+func (s *Session) SetGlobal(context.Context, string, string) error {
+	return ErrNotImplemented
 }
 
 // osRun is the production runner: it executes argv with the given env appended

@@ -24,6 +24,9 @@ require (
 	github.com/posener/complete v1.2.3 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/riywo/loginshell v0.0.0-20200815045211-7d26008be1ab // indirect
+	github.com/vista-cloud-dev/m-driver-sdk v0.0.0
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	golang.org/x/sys v0.44.0 // indirect
 )
+
+replace github.com/vista-cloud-dev/m-driver-sdk => ../m-driver-sdk

@@ -4,17 +4,16 @@ import (
 	"context"
 	"reflect"
 	"testing"
+
+	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 )
 
-// The Fake and the two real strategies must all satisfy Transport. A compile
-// failure here is the first signal the interface shape drifted.
-var (
-	_ Transport = (*Fake)(nil)
-	_ Transport = (*Session)(nil)
-)
+// Session must satisfy the SDK Transport. A compile failure here is the first
+// signal the interface shape drifted.
+var _ mdriver.Transport = (*Session)(nil)
 
 // recordingRunner captures the last argv/env/stdin and returns canned output,
-// so the session strategies' command construction is verified without a real
+// so the session strategy's command construction is verified without a real
 // engine (the in-strategy seam, distinct from the verb-level Transport).
 type recordingRunner struct {
 	out  CmdOutput
@@ -53,7 +52,7 @@ func TestLocal_Exec_CommandMode(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "hello\n", Code: 0}}
 	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb"}, rr.run)
 
-	res, err := s.Exec(context.Background(), ExecRequest{Mode: ExecCommand, Command: "write \"hello\",!"})
+	res, err := s.Exec(context.Background(), mdriver.ExecRequest{Command: "write \"hello\",!"})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -73,7 +72,7 @@ func TestLocal_Exec_RoutineMode_ArgsToCmdline(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "ok", Code: 0}}
 	s := NewSession(Config{Transport: "local"}, rr.run) // empty Dist → bare "yottadb" on PATH
 
-	_, err := s.Exec(context.Background(), ExecRequest{Mode: ExecRoutine, EntryRef: "RUN^STDHARN", Args: []string{"zzt42", "VERBOSE"}})
+	_, err := s.Exec(context.Background(), mdriver.ExecRequest{EntryRef: "RUN^STDHARN", Args: []string{"zzt42", "VERBOSE"}})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -88,7 +87,7 @@ func TestLocal_Exec_ScriptMode_DirectWithHalt(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
 	s := NewSession(Config{Transport: "local"}, rr.run)
 
-	_, err := s.Exec(context.Background(), ExecRequest{Mode: ExecScript, Script: "set x=1\nwrite x"})
+	_, err := s.Exec(context.Background(), mdriver.ExecRequest{Script: "set x=1\nwrite x"})
 	if err != nil {
 		t.Fatalf("exec: %v", err)
 	}
@@ -115,27 +114,6 @@ func TestDocker_WrapsArgv(t *testing.T) {
 	want := []string{"docker", "exec", "-i", "m-test-engine", "yottadb", "-run", "%XCMD", "write 1"}
 	if !reflect.DeepEqual(rr.argv, want) {
 		t.Errorf("argv = %v, want %v", rr.argv, want)
-	}
-}
-
-func TestFake_RecordsAndReturns(t *testing.T) {
-	f := &Fake{
-		ExecResults:  []ExecResult{{Stdout: "canned", Status: 0}},
-		HealthResult: HealthResult{Running: true, Healthy: true, Version: "r2.02"},
-	}
-	res, err := f.Exec(context.Background(), ExecRequest{Mode: ExecCommand, Command: "write 1"})
-	if err != nil {
-		t.Fatalf("exec: %v", err)
-	}
-	if res.Stdout != "canned" {
-		t.Errorf("stdout = %q, want canned", res.Stdout)
-	}
-	if len(f.ExecCalls) != 1 || f.ExecCalls[0].Command != "write 1" {
-		t.Errorf("ExecCalls = %+v, want one recorded call", f.ExecCalls)
-	}
-	h, _ := f.Health(context.Background())
-	if h.Version != "r2.02" {
-		t.Errorf("health version = %q, want r2.02", h.Version)
 	}
 }
 

@@ -18,6 +18,19 @@ type Envelope struct {
 	Data          any          `json:"data,omitempty"`
 	Diagnostics   []Diagnostic `json:"diagnostics,omitempty"`
 	Error         *Error       `json:"error,omitempty"`
+	EngineError   *EngineError `json:"engineError,omitempty"`
+}
+
+// EngineError is the driver-contract §7 structured engine fault. On any
+// compile/runtime fault, exec/cover verbs set ok=false AND surface this as a
+// sibling of error, so a RED suite shows the real cause (a <NOROUTINE> at a
+// line) rather than passed:0, failed:0. Mnemonic carries the IRIS <…> /
+// %YDB-E-… code.
+type EngineError struct {
+	Routine  string `json:"routine,omitempty"`
+	Line     int    `json:"line,omitempty"`
+	Mnemonic string `json:"mnemonic,omitempty"`
+	Text     string `json:"text,omitempty"`
 }
 
 // Diagnostic is one lint/diagnostic finding (the editor↔CI shared shape).
