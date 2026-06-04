@@ -6,10 +6,16 @@
     "docker"
   ],
   "axes": {
+    "lifecycle": [
+      "status",
+      "wait"
+    ],
     "meta": [
       "caps",
+      "info",
       "version",
-      "schema"
+      "schema",
+      "doctor"
     ]
   },
   "features": {

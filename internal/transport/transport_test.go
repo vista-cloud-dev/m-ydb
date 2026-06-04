@@ -117,6 +117,53 @@ func TestDocker_WrapsArgv(t *testing.T) {
 	}
 }
 
+func TestLocal_Util_Argv(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
+	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb", GblDir: "/data/m.gld"}, rr.run)
+
+	if _, err := s.Util(context.Background(), "mupip", []string{"rundown", "-region", "*"}); err != nil {
+		t.Fatalf("util: %v", err)
+	}
+	// A YDB utility resolves to $ydb_dist/<util> locally and carries the env.
+	want := []string{"/opt/yottadb/mupip", "rundown", "-region", "*"}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv = %v, want %v", rr.argv, want)
+	}
+	assertEnv(t, rr.env, "ydb_dist=/opt/yottadb", "ydb_gbldir=/data/m.gld")
+}
+
+func TestDocker_Util_Argv(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
+	s := NewSession(Config{Transport: "docker", Container: "m-test-engine"}, rr.run)
+
+	if _, err := s.Util(context.Background(), "gde", nil); err != nil {
+		t.Fatalf("util: %v", err)
+	}
+	want := []string{"docker", "exec", "-i", "m-test-engine", "gde"}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv = %v, want %v", rr.argv, want)
+	}
+}
+
+func TestVersion_ParsesRelease(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{
+		Stdout: "YottaDB release r2.02\nUpstream V7.0-005\n", Code: 0,
+	}}
+	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb"}, rr.run)
+
+	v, err := s.Version(context.Background())
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if v != "r2.02" {
+		t.Errorf("version = %q, want r2.02", v)
+	}
+	want := []string{"/opt/yottadb/yottadb", "-version"}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv = %v, want %v", rr.argv, want)
+	}
+}
+
 func assertEnv(t *testing.T, env []string, want ...string) {
 	t.Helper()
 	set := map[string]bool{}

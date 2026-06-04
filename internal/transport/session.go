@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
@@ -165,6 +167,36 @@ func (s *Session) ReadGlobal(context.Context, mdriver.GlobalRef) (mdriver.Global
 // SetGlobal — global write (fixture seeding) lands in M4.
 func (s *Session) SetGlobal(context.Context, string, string) error {
 	return ErrNotImplemented
+}
+
+// Util runs a YottaDB utility (yottadb, mupip, gde, lke, dse) with the given
+// args, wrapped for the active transport. It is NOT part of the neutral
+// Transport contract — these binaries are YottaDB-specific — so it lives on the
+// concrete Session for lifecycle/admin/native use within m-ydb. Locally the
+// binary resolves to $ydb_dist/<name>; under docker it runs in the container.
+func (s *Session) Util(ctx context.Context, name string, args []string) (CmdOutput, error) {
+	bin := name
+	if !s.isDocker() && s.cfg.Dist != "" {
+		bin = filepath.Join(s.cfg.Dist, name)
+	}
+	argv := append([]string{bin}, args...)
+	return s.run(ctx, s.wrap(argv), s.env(), "")
+}
+
+var releaseRe = regexp.MustCompile(`r\d+\.\d+`)
+
+// Version returns the YottaDB release (e.g. "r2.02") from `yottadb -version`.
+// It is the engine-version probe for status/info/doctor (the SDK Health probe
+// stays a bare readiness check).
+func (s *Session) Version(ctx context.Context) (string, error) {
+	out, err := s.Util(ctx, "yottadb", []string{"-version"})
+	if err != nil {
+		return "", err
+	}
+	if m := releaseRe.FindString(out.Stdout); m != "" {
+		return m, nil
+	}
+	return "", fmt.Errorf("transport: could not parse YottaDB version from %q", strings.TrimSpace(out.Stdout))
 }
 
 // osRun is the production runner: it executes argv with the given env appended
