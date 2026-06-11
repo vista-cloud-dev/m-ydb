@@ -83,18 +83,10 @@ func (doctorCmd) Run(cc *clikit.Context, conn *config.Conn) error {
 		return clikit.Fail(clikit.ExitUsage, "BAD_CONN", err.Error(), "")
 	}
 	res, exit := realChecks(conn).run(context.Background(), conn)
-	if rerr := cc.Result(res, func() { renderDoctor(cc, res) }); rerr != nil {
-		return rerr
-	}
-	switch exit {
-	case clikit.ExitUnreachable:
-		return clikit.Fail(clikit.ExitUnreachable, "UNREACHABLE",
-			"engine unreachable — the YottaDB binary or docker is not available", "see the failing checks above")
-	case clikit.ExitRuntime:
-		return clikit.Fail(clikit.ExitRuntime, "PREFLIGHT_FAILED",
-			"one or more preflight checks failed", "see the failing checks above")
-	}
-	return nil
+	// doctor's payload is a full report even on a non-zero outcome, so emit the
+	// data envelope with the resolved exit (0 all-green / 5 a check failed / 6
+	// unreachable) — the envelope's exit then matches the process exit (§2).
+	return cc.ResultExit(res, exit, func() { renderDoctor(cc, res) })
 }
 
 var releaseRe = regexp.MustCompile(`r(\d+)\.(\d+)`)
