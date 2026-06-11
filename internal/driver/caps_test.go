@@ -44,17 +44,16 @@ func TestCaps_Invariants(t *testing.T) {
 	if c.Contract != mdriver.ContractVersion {
 		t.Errorf("contract = %q, want %q", c.Contract, mdriver.ContractVersion)
 	}
-	if want := []string{"local", "docker"}; !equal(c.Transports, want) {
+	if want := []string{"local", "docker", "remote"}; !equal(c.Transports, want) {
 		t.Errorf("transports = %v, want %v", c.Transports, want)
 	}
-	// YottaDB has no network API — remote must never be advertised.
-	if c.Features.Remote {
-		t.Error("features.remote must be false for YottaDB")
+	// remote is the SSH host-shell transport (not a YottaDB network engine API):
+	// it reaches a filesystem YottaDB on another host. It IS advertised.
+	if !c.Features.Remote {
+		t.Error("features.remote must be true (SSH host-shell transport)")
 	}
-	for _, tr := range c.Transports {
-		if tr == mdriver.TransportRemote {
-			t.Errorf("transports advertise %q, which YottaDB does not support", tr)
-		}
+	if !contains(c.Transports, mdriver.TransportRemote) {
+		t.Error("transports must advertise remote (SSH)")
 	}
 	// Honest caps: every advertised (non-nil) axis must be non-empty — never
 	// advertise an axis with no verbs.

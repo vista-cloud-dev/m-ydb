@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	mdriver "github.com/vista-cloud-dev/m-driver-sdk"
@@ -30,13 +31,23 @@ var ErrNotImplemented = errors.New("transport: verb not yet implemented")
 
 // Config is the resolved connection for a session transport. For docker only
 // Container is used (the container's preconfigured database + yottadb on PATH);
-// for local the three $ydb_* paths locate the install and database.
+// for local the three $ydb_* paths locate the install and database; for remote
+// the SSH fields locate a network-only host and EnvFile sources its YottaDB env.
 type Config struct {
-	Transport string // "local" | "docker"
-	Dist      string // $ydb_dist (dir containing the yottadb binary)
+	Transport string // "local" | "docker" | "remote"
+	Dist      string // $ydb_dist (dir containing the yottadb binary; honored on local + remote)
 	GblDir    string // $ydb_gbldir (.gld global directory)
 	Routines  string // $ydb_routines (source/object search path)
 	Container string // docker: container name
+
+	// remote (SSH) transport — for a network-only YottaDB VistA (e.g. a FOIA
+	// `vehu` container reachable on :22 but not exec-able locally). The same
+	// yottadb argv is wrapped in `ssh`; the engine env is sourced on the far side.
+	Host     string // ssh target host
+	Port     int    // ssh port (0 → ssh default 22)
+	User     string // ssh user (empty → ssh default / current user)
+	Identity string // ssh -i identity file (optional)
+	EnvFile  string // remote file to `source` for the YottaDB env (e.g. /home/vehu/etc/env)
 }
 
 // CmdOutput is the captured result of one OS command (the in-strategy seam).
@@ -67,9 +78,12 @@ func NewSession(cfg Config, run runFunc) *Session {
 }
 
 func (s *Session) isDocker() bool { return s.cfg.Transport == mdriver.TransportDocker }
+func (s *Session) isRemote() bool { return s.cfg.Transport == mdriver.TransportRemote }
 
 // yottabin resolves the yottadb invocation: the container's PATH binary under
-// docker, or $ydb_dist/yottadb locally (bare "yottadb" if Dist is unset).
+// docker, or $ydb_dist/yottadb (bare "yottadb" if Dist is unset) for local and
+// remote — over SSH a Dist locates the binary when the env file does not put it
+// on PATH.
 func (s *Session) yottabin() string {
 	if s.isDocker() {
 		return "yottadb"
@@ -81,9 +95,10 @@ func (s *Session) yottabin() string {
 }
 
 // env returns the YottaDB environment for a local invocation; docker relies on
-// the container's preconfigured env, so it returns nil.
+// the container's preconfigured env and remote sources EnvFile on the far side,
+// so both return nil.
 func (s *Session) env() []string {
-	if s.isDocker() {
+	if s.isDocker() || s.isRemote() {
 		return nil
 	}
 	var env []string
@@ -99,12 +114,65 @@ func (s *Session) env() []string {
 	return env
 }
 
-// wrap prefixes `docker exec -i <container>` under the docker transport.
+// wrap adapts the engine argv to the active transport: `docker exec -i
+// <container>` for docker, an `ssh` invocation for remote, or the bare argv for
+// local.
 func (s *Session) wrap(argv []string) []string {
-	if s.isDocker() {
+	switch {
+	case s.isDocker():
 		return append([]string{"docker", "exec", "-i", s.cfg.Container}, argv...)
+	case s.isRemote():
+		return s.sshWrap(argv)
+	default:
+		return argv
 	}
-	return argv
+}
+
+// sshWrap turns an engine argv into an `ssh` invocation whose single remote
+// command sources the instance env file (if set) and then runs the argv. The
+// remote command is shell-quoted for the far-side shell; local stdin is
+// forwarded by ssh to the remote command (so direct-mode scripts work).
+func (s *Session) sshWrap(argv []string) []string {
+	remote := shJoin(argv)
+	if s.cfg.EnvFile != "" {
+		remote = ". " + shToken(s.cfg.EnvFile) + " && " + remote
+	}
+	ssh := []string{"ssh"}
+	if s.cfg.Port != 0 {
+		ssh = append(ssh, "-p", strconv.Itoa(s.cfg.Port))
+	}
+	if s.cfg.Identity != "" {
+		ssh = append(ssh, "-i", s.cfg.Identity)
+	}
+	// BatchMode prevents an interactive password prompt from hanging a CI run.
+	ssh = append(ssh, "-o", "BatchMode=yes")
+	target := s.cfg.Host
+	if s.cfg.User != "" {
+		target = s.cfg.User + "@" + s.cfg.Host
+	}
+	return append(ssh, target, remote)
+}
+
+// shSafe matches tokens that need no quoting for a POSIX shell.
+var shSafe = regexp.MustCompile(`^[A-Za-z0-9_@%:=+,./-]+$`)
+
+// shToken single-quotes a token unless it is already shell-safe (so common
+// argv like `yottadb`, `-run`, `%XCMD`, and plain paths stay readable). A `$`
+// inside single quotes is literal — exactly what %XCMD wants for `W $ZV`.
+func shToken(s string) string {
+	if s != "" && shSafe.MatchString(s) {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// shJoin shell-quotes each argv element and joins them with spaces.
+func shJoin(argv []string) string {
+	parts := make([]string, len(argv))
+	for i, a := range argv {
+		parts[i] = shToken(a)
+	}
+	return strings.Join(parts, " ")
 }
 
 // buildExec turns an ExecRequest into a yottadb argv + stdin. The shape is

@@ -164,8 +164,12 @@ func (k checks) run(ctx context.Context, conn *config.Conn) (doctorResult, int) 
 			add("routines", true, conn.Routines, "")
 		}
 	} else {
-		add("gld", true, "managed by the container", "")
-		add("routines", true, "managed by the container", "")
+		loc := "managed by the container"
+		if conn.Transport == "remote" {
+			loc = "managed on the remote host"
+		}
+		add("gld", true, loc, "")
+		add("routines", true, loc, "")
 	}
 
 	res.OK = true

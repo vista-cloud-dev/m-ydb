@@ -19,11 +19,21 @@ import (
 // so every command receives a *config.Conn. Flags win over M_YDB_* env (Kong),
 // which in turn is filled from the standard ydb_*/gtm_* env by Resolve.
 type Conn struct {
-	Transport string `env:"M_YDB_TRANSPORT" enum:"local,docker" default:"local" help:"Engine transport: local (native install) | docker (a container we manage). YottaDB has no network API, so there is no remote."`
-	Dist      string `name:"ydb-dist" env:"M_YDB_DIST" help:"$ydb_dist — directory holding the yottadb/mupip/gde binaries (local; defaults to $ydb_dist/$gtm_dist)." placeholder:"DIR"`
+	Transport string `env:"M_YDB_TRANSPORT" enum:"local,docker,remote" default:"local" help:"Engine transport: local (native install) | docker (a container we manage) | remote (SSH to a host running YottaDB)."`
+	Dist      string `name:"ydb-dist" env:"M_YDB_DIST" help:"$ydb_dist — directory holding the yottadb/mupip/gde binaries (local + remote; defaults to $ydb_dist/$gtm_dist)." placeholder:"DIR"`
 	GblDir    string `name:"gbldir" env:"M_YDB_GBLDIR" help:"$ydb_gbldir — the .gld global directory (defaults to $ydb_gbldir/$gtmgbldir)." placeholder:"PATH"`
 	Routines  string `name:"routines" env:"M_YDB_ROUTINES" help:"$ydb_routines — routine source/object search path (defaults to $ydb_routines/$gtmroutines)." placeholder:"PATH"`
 	Container string `env:"M_YDB_CONTAINER" help:"docker transport: the container name to exec into." placeholder:"NAME"`
+
+	// remote (SSH) transport — reach a filesystem YottaDB on another host (e.g. a
+	// FOIA `vehu` server). The same yottadb invocation is wrapped in `ssh`; the
+	// engine env is sourced from EnvFile on the far side. SSH is a host-shell
+	// transport, not a YottaDB network engine API.
+	Host     string `env:"M_YDB_HOST" help:"remote (SSH) transport: target host." placeholder:"HOST"`
+	Port     int    `env:"M_YDB_PORT" help:"remote (SSH) transport: ssh port (default 22)." placeholder:"PORT"`
+	User     string `env:"M_YDB_USER" help:"remote (SSH) transport: ssh user." placeholder:"USER"`
+	Identity string `name:"identity" env:"M_YDB_IDENTITY" help:"remote (SSH) transport: ssh identity file (-i)." placeholder:"FILE"`
+	EnvFile  string `name:"env-file" env:"M_YDB_ENVFILE" help:"remote (SSH) transport: remote file to source for the YottaDB env (e.g. /home/vehu/etc/env)." placeholder:"PATH"`
 
 	// sync axis (M2) behavior flags.
 	Mirror string `env:"M_YDB_MIRROR" default:".m-cache" help:"Mirror root directory for the sync axis (routine source ↔ instance)."`
@@ -60,6 +70,9 @@ func (c *Conn) Validate() error {
 	if c.Transport == "docker" && c.Container == "" {
 		return fmt.Errorf("docker transport needs a container: pass --container or M_YDB_CONTAINER")
 	}
+	if c.Transport == transportRemote && c.Host == "" {
+		return fmt.Errorf("remote transport needs a host: pass --host or M_YDB_HOST")
+	}
 	return nil
 }
 
@@ -71,6 +84,11 @@ func (c *Conn) TransportConfig() transport.Config {
 		GblDir:    c.GblDir,
 		Routines:  c.Routines,
 		Container: c.Container,
+		Host:      c.Host,
+		Port:      c.Port,
+		User:      c.User,
+		Identity:  c.Identity,
+		EnvFile:   c.EnvFile,
 	}
 }
 
@@ -98,6 +116,9 @@ func (c *Conn) SourceDirs() []string {
 // docker. It fails (usable for an exit-2) when no source directory is resolvable
 // or the docker container is missing.
 func (c *Conn) SourceStore() (source.Store, error) {
+	if c.Transport == transportRemote {
+		return nil, fmt.Errorf("sync over the remote (SSH) transport is not yet supported")
+	}
 	dirs := c.SourceDirs()
 	if len(dirs) == 0 {
 		return nil, fmt.Errorf("no routine source directory: set --routines or $ydb_routines")
@@ -111,4 +132,7 @@ func (c *Conn) SourceStore() (source.Store, error) {
 	return source.NewFileStore(dirs), nil
 }
 
-const transportDocker = "docker"
+const (
+	transportDocker = "docker"
+	transportRemote = "remote"
+)

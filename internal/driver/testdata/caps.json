@@ -3,7 +3,8 @@
   "contract": "1.0",
   "transports": [
     "local",
-    "docker"
+    "docker",
+    "remote"
   ],
   "axes": {
     "lifecycle": [
@@ -40,7 +41,7 @@
     ]
   },
   "features": {
-    "remote": false,
+    "remote": true,
     "prune": true,
     "ephemeralPrefix": true,
     "snapshot": false

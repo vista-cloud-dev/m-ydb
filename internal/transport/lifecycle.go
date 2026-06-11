@@ -21,6 +21,12 @@ import (
 
 var errNoGblDir = errors.New("transport: no global directory (.gld) configured")
 
+// errRemoteAttachOnly: over SSH the YottaDB instance is provisioned and torn
+// down on the host, out of band — the driver only attaches to it (like the IRIS
+// remote transport). So provision/destroy are refused; up verifies reachability
+// and down is a no-op.
+var errRemoteAttachOnly = errors.New("transport: remote (SSH) is attach-only — provision/destroy the YottaDB instance on the host, not through the driver")
+
 // ProvisionOpts carries provision inputs (driver-contract §5.1). For YottaDB
 // local, Image/Namespace/License are not applicable; Image is the docker image.
 type ProvisionOpts struct {
@@ -47,6 +53,9 @@ func filesExist(paths ...string) bool {
 // Provision creates the instance: GDE layout + mupip create (local), or a
 // container (docker).
 func (s *Session) Provision(ctx context.Context, opts ProvisionOpts) (mdriver.StateResult, error) {
+	if s.isRemote() {
+		return mdriver.StateResult{}, errRemoteAttachOnly
+	}
 	if s.isDocker() {
 		args := []string{"run", "-d", "--name", s.cfg.Container}
 		if opts.Image != "" {
@@ -75,6 +84,16 @@ func (s *Session) Provision(ctx context.Context, opts ProvisionOpts) (mdriver.St
 // Up brings the instance into a usable state: start the container (docker), or
 // (local) ensure the .gld/.dat exist and clear stale shared memory.
 func (s *Session) Up(ctx context.Context) (mdriver.StateResult, error) {
+	if s.isRemote() {
+		h, err := s.Health(ctx)
+		if err != nil {
+			return mdriver.StateResult{}, err
+		}
+		if !h.Healthy {
+			return mdriver.StateResult{State: "unreachable", Endpoint: s.cfg.Host}, nil
+		}
+		return mdriver.StateResult{State: "ready", Endpoint: s.cfg.Host}, nil
+	}
 	if s.isDocker() {
 		if _, err := s.Docker(ctx, "start", s.cfg.Container); err != nil {
 			return mdriver.StateResult{}, err
@@ -99,6 +118,9 @@ func (s *Session) Up(ctx context.Context) (mdriver.StateResult, error) {
 
 // Down releases the instance: stop the container (docker) or mupip rundown (local).
 func (s *Session) Down(ctx context.Context) (mdriver.StateResult, error) {
+	if s.isRemote() {
+		return mdriver.StateResult{State: "detached", Endpoint: s.cfg.Host}, nil
+	}
 	if s.isDocker() {
 		if _, err := s.Docker(ctx, "stop", s.cfg.Container); err != nil {
 			return mdriver.StateResult{}, err
@@ -122,6 +144,9 @@ func (s *Session) Restart(ctx context.Context) (mdriver.StateResult, error) {
 // Destroy removes the instance: rm the container (docker) or delete the database
 // files (local).
 func (s *Session) Destroy(ctx context.Context) (mdriver.StateResult, error) {
+	if s.isRemote() {
+		return mdriver.StateResult{}, errRemoteAttachOnly
+	}
 	if s.isDocker() {
 		if _, err := s.Docker(ctx, "rm", "-f", s.cfg.Container); err != nil {
 			return mdriver.StateResult{}, err

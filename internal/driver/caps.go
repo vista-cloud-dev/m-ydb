@@ -14,14 +14,17 @@ import mdriver "github.com/vista-cloud-dev/m-driver-sdk"
 // native (info/doctor/selftest land with M1). Do not list a verb here before its
 // command exists.
 //
-// YottaDB is daemonless and file-based, so only the local and docker transports
-// are supported (no network API → features.remote = false). The transport seam
-// exists, so both are advertised up-front.
+// YottaDB is daemonless and file-based. There is no network *engine* API, but
+// the engine is reachable three ways: local (native install), docker (a
+// container we manage), and remote — an SSH host-shell transport that runs the
+// same yottadb invocation on another host (e.g. a FOIA `vehu` server). remote is
+// therefore a real transport (features.remote = true); it is host-shell reach,
+// not an IRIS-style network protocol. (sync over remote is not yet wired.)
 func Caps() mdriver.Caps {
 	return mdriver.Caps{
 		Engine:     "ydb",
 		Contract:   mdriver.ContractVersion,
-		Transports: []string{mdriver.TransportLocal, mdriver.TransportDocker},
+		Transports: []string{mdriver.TransportLocal, mdriver.TransportDocker, mdriver.TransportRemote},
 		Axes: mdriver.Axes{
 			// Only the verbs actually wired; grows per milestone.
 			// M0 meta + M1a info/doctor; M1a lifecycle health surface.
@@ -35,7 +38,7 @@ func Caps() mdriver.Caps {
 			Exec: []string{"load", "run", "eval", "abort"},
 		},
 		Features: mdriver.Features{
-			Remote:          false, // YottaDB has no network API
+			Remote:          true,  // SSH host-shell transport (not a network engine API)
 			Prune:           true,  // sync deploy --prune true-sync (M2)
 			EphemeralPrefix: true,  // exec --prefix zzt<runid> staging (M3)
 			Snapshot:        false, // lifecycle snapshot/rollback — roadmap §10, not yet

@@ -206,6 +206,118 @@ func TestVersion_ParsesRelease(t *testing.T) {
 	}
 }
 
+// --- remote (SSH) transport --------------------------------------------------
+//
+// The remote transport reaches a network-only YottaDB VistA (e.g. a FOIA `vehu`
+// container that exposes :22 but no engine-local shell to us) by wrapping the
+// same yottadb argv in `ssh`, sourcing the instance env file on the far side.
+// These verify the ssh argv + remote-command construction without a real host
+// (the in-strategy seam); live SSH is the gated integration tier.
+
+func TestRemote_Health_Argv(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{Stdout: "1", Code: 0}}
+	s := NewSession(Config{
+		Transport: mdriver.TransportRemote,
+		Host:      "vehu.local", Port: 2222, User: "vehu",
+		EnvFile: "/home/vehu/etc/env",
+	}, rr.run)
+
+	h, err := s.Health(context.Background())
+	if err != nil {
+		t.Fatalf("health: %v", err)
+	}
+	if !h.Running || !h.Healthy {
+		t.Errorf("health = %+v, want running+healthy", h)
+	}
+	// `ssh -p 2222 -o BatchMode=yes vehu@vehu.local '. <envfile> && yottadb -run %XCMD <cmd>'`.
+	// The env file is sourced remotely; the probe command "write 1" is shell-quoted.
+	want := []string{
+		"ssh", "-p", "2222", "-o", "BatchMode=yes", "vehu@vehu.local",
+		". /home/vehu/etc/env && yottadb -run %XCMD 'write 1'",
+	}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv =\n  %v\nwant\n  %v", rr.argv, want)
+	}
+	// Remote env is sourced on the far side, never pushed as local process env.
+	if len(rr.env) != 0 {
+		t.Errorf("env = %v, want nil (sourced via EnvFile)", rr.env)
+	}
+}
+
+func TestRemote_Exec_DollarZV(t *testing.T) {
+	// The T0.1 gate: `W $ZV` over the network. `$` is literal inside the single
+	// quotes the remote sh strips, so %XCMD receives `W $ZV` as one argument.
+	rr := &recordingRunner{out: CmdOutput{Stdout: "YottaDB r2.02\n", Code: 0}}
+	s := NewSession(Config{
+		Transport: mdriver.TransportRemote,
+		Host:      "h", User: "u", EnvFile: "/env",
+	}, rr.run)
+
+	res, err := s.Exec(context.Background(), mdriver.ExecRequest{Command: "W $ZV"})
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	if res.Stdout == "" {
+		t.Error("want $ZV output")
+	}
+	want := []string{
+		"ssh", "-o", "BatchMode=yes", "u@h",
+		". /env && yottadb -run %XCMD 'W $ZV'",
+	}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv =\n  %v\nwant\n  %v", rr.argv, want)
+	}
+}
+
+func TestRemote_Exec_ScriptMode_StdinForwarded(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{Code: 0}}
+	s := NewSession(Config{
+		Transport: mdriver.TransportRemote,
+		Host:      "vehu.local",
+		Identity:  "/keys/id_ed25519",
+	}, rr.run)
+
+	if _, err := s.Exec(context.Background(), mdriver.ExecRequest{Script: "set x=1\nwrite x"}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	// No EnvFile → bare remote command; no User → host-only target; Identity → -i;
+	// no Port → default (omit -p).
+	want := []string{
+		"ssh", "-i", "/keys/id_ed25519", "-o", "BatchMode=yes", "vehu.local",
+		"yottadb -direct",
+	}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv =\n  %v\nwant\n  %v", rr.argv, want)
+	}
+	// Direct-mode script is forwarded on stdin (ssh pipes local stdin to the
+	// remote command) and MUST end with halt or the remote session hangs.
+	if rr.in != "set x=1\nwrite x\nhalt\n" {
+		t.Errorf("stdin = %q, want %q", rr.in, "set x=1\nwrite x\nhalt\n")
+	}
+}
+
+func TestRemote_HonorsDistAndVersion(t *testing.T) {
+	// Version (a Util call) also rides the ssh wrap; Dist locates the binary on
+	// the far side when the env file does not put yottadb on PATH.
+	rr := &recordingRunner{out: CmdOutput{Stdout: "YottaDB release r2.02\n", Code: 0}}
+	s := NewSession(Config{
+		Transport: mdriver.TransportRemote,
+		Host:      "h", User: "u", Dist: "/opt/yottadb",
+	}, rr.run)
+
+	v, err := s.Version(context.Background())
+	if err != nil {
+		t.Fatalf("version: %v", err)
+	}
+	if v != "r2.02" {
+		t.Errorf("version = %q, want r2.02", v)
+	}
+	want := []string{"ssh", "-o", "BatchMode=yes", "u@h", "/opt/yottadb/yottadb -version"}
+	if !reflect.DeepEqual(rr.argv, want) {
+		t.Errorf("argv =\n  %v\nwant\n  %v", rr.argv, want)
+	}
+}
+
 func assertEnv(t *testing.T, env []string, want ...string) {
 	t.Helper()
 	set := map[string]bool{}
