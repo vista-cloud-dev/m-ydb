@@ -49,5 +49,7 @@ func Run(name, description string, cli any, g *Globals, extra ...kong.Option) in
 		RenderError(cc, err)
 		return exitOf(err)
 	}
-	return ExitOK
+	// A command may have recorded a deliberate non-zero exit via ResultExit
+	// (its data envelope is already on stdout); otherwise this is ExitOK.
+	return cc.ExitCode()
 }

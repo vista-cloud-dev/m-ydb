@@ -1,0 +1,9 @@
+{
+  "id": "tool:m-ydb",
+  "repo": "https://github.com/vista-cloud-dev/m-ydb",
+  "role": "YottaDB engine driver — the m-ydb binary producing the driver envelope",
+  "language": ["go"],
+  "layer": "m",
+  "license": "AGPL-3.0",
+  "verification_commands": ["go test ./...", "./dist/m arch check ."]
+}

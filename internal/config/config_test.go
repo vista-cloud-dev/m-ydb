@@ -52,10 +52,28 @@ func TestValidate_DockerNeedsContainer(t *testing.T) {
 	}
 }
 
+func TestValidate_RemoteNeedsHost(t *testing.T) {
+	if err := (&Conn{Transport: "remote"}).Validate(); err == nil {
+		t.Error("remote transport without a host must be a validation error")
+	}
+	if err := (&Conn{Transport: "remote", Host: "vehu.local"}).Validate(); err != nil {
+		t.Errorf("remote with a host should validate: %v", err)
+	}
+}
+
 func TestTransportConfig_Maps(t *testing.T) {
 	c := &Conn{Transport: "docker", Container: "m-test-engine", Dist: "/opt/yottadb"}
 	tc := c.TransportConfig()
 	if tc.Transport != "docker" || tc.Container != "m-test-engine" || tc.Dist != "/opt/yottadb" {
+		t.Errorf("TransportConfig = %+v", tc)
+	}
+}
+
+func TestTransportConfig_MapsRemote(t *testing.T) {
+	c := &Conn{Transport: "remote", Host: "h", Port: 2222, User: "u", Identity: "/k", EnvFile: "/env"}
+	tc := c.TransportConfig()
+	if tc.Transport != "remote" || tc.Host != "h" || tc.Port != 2222 ||
+		tc.User != "u" || tc.Identity != "/k" || tc.EnvFile != "/env" {
 		t.Errorf("TransportConfig = %+v", tc)
 	}
 }

@@ -8,3 +8,7 @@ on:
 jobs:
   ci:
     uses: vista-cloud-dev/.github/.github/workflows/go-ci.yml@main
+    with:
+      schema-check: false # driver binary — no m-cli-style `schema` command
+  arch:
+    uses: vista-cloud-dev/.github/.github/workflows/arch-waterline.yml@main

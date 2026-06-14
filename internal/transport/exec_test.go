@@ -128,6 +128,23 @@ func TestExecTrapped_DockerPrependsZRoutines(t *testing.T) {
 	}
 }
 
+func TestExecTrapped_DockerSetsZGblDir(t *testing.T) {
+	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
+	s := NewSession(Config{Transport: "docker", Container: "vehu", GblDir: "/home/vehu/g/vehu.gld", Routines: "/home/vehu/r"}, rr.run)
+
+	if _, err := s.ExecTrapped(context.Background(), mdriver.ExecRequest{Command: "write $data(^XPD(9.7,0))"}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	// docker exec carries no -e, and the container's default env has no
+	// ydb_gbldir — so the global directory must be established at runtime inside
+	// the command (mirroring the $ZROUTINES layering); otherwise any global
+	// access faults %YDB-E-ZGBLDIRUNDEF.
+	wrapped := rr.argv[len(rr.argv)-1]
+	if !containsStr(wrapped, `SET $ZGBLDIR="/home/vehu/g/vehu.gld"`) {
+		t.Errorf("command did not set $ZGBLDIR for docker: %q", wrapped)
+	}
+}
+
 func TestExecTrapped_LocalCarriesEnv(t *testing.T) {
 	rr := &recordingRunner{out: CmdOutput{Stdout: "", Code: 0}}
 	s := NewSession(Config{Transport: "local", Dist: "/opt/yottadb", Routines: "/src"}, rr.run)
