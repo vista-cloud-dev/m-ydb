@@ -125,9 +125,11 @@ func TestDocker_WrapsArgv(t *testing.T) {
 	if _, err := s.Health(context.Background()); err != nil {
 		t.Fatalf("health: %v", err)
 	}
-	// docker transport prefixes `docker exec -i <container>` and uses the
-	// container's yottadb on PATH (no host dist path).
-	want := []string{"docker", "exec", "-i", "m-test-engine", "yottadb", "-run", "%XCMD", "write 1"}
+	// docker transport prefixes `docker exec -i <container> bash -lc` so the
+	// container's preconfigured engine env (gtmgbldir/gtmroutines on a GT.M
+	// VistA like vehu) is sourced by the login shell; the yottadb argv is
+	// shell-joined into the -lc command string.
+	want := []string{"docker", "exec", "-i", "m-test-engine", "bash", "-lc", "yottadb -run %XCMD 'write 1'"}
 	if !reflect.DeepEqual(rr.argv, want) {
 		t.Errorf("argv = %v, want %v", rr.argv, want)
 	}
@@ -169,7 +171,7 @@ func TestDocker_Util_Argv(t *testing.T) {
 	if _, err := s.Util(context.Background(), "gde", nil, ""); err != nil {
 		t.Fatalf("util: %v", err)
 	}
-	want := []string{"docker", "exec", "-i", "m-test-engine", "gde"}
+	want := []string{"docker", "exec", "-i", "m-test-engine", "bash", "-lc", "gde"}
 	if !reflect.DeepEqual(rr.argv, want) {
 		t.Errorf("argv = %v, want %v", rr.argv, want)
 	}

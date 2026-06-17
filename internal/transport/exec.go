@@ -157,10 +157,10 @@ func (s *Session) buildTrapped(req mdriver.ExecRequest) string {
 	b.WriteString(trapClause())
 	b.WriteByte(' ')
 	// Establish the global directory at runtime, mirroring the $ZROUTINES
-	// layering below. Under docker `wrap()` is a plain `docker exec` (no -e) and
-	// the container's default env has no ydb_gbldir, so without this any
-	// global-accessing M faults %YDB-E-ZGBLDIRUNDEF; on local/remote it is a
-	// harmless re-assert of the path the env / EnvFile already resolved.
+	// layering below. This applies an explicit --gbldir on top of whatever the
+	// transport already resolved (the docker login shell's gtmgbldir, the local
+	// env, or the remote EnvFile); when --gbldir is unset it is skipped and the
+	// resolved default stands.
 	if s.cfg.GblDir != "" {
 		fmt.Fprintf(&b, "SET $ZGBLDIR=%s ", mQuote(s.cfg.GblDir))
 	}

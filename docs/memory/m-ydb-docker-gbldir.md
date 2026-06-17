@@ -56,3 +56,30 @@ The YDB driver path (`v pkg … --engine ydb --transport docker`) is now genuine
 real, not just raw-M. **Unblocks m-stdlib VSL T0b.2** (branch
 `t0b2-msl-kids-base`): rebuild done; resume `scripts/kids-test-in-place.sh ydb`
 there. See [[m-ydb-driver-m0]] (the M3 exec axis this corrects).
+
+## Follow-on: docker now login-shell sourced — zero gbldir/routines config (2026-06-17)
+The 2026-06-12 fix worked only when the caller **passed** the paths explicitly
+(the live proof used `M_YDB_GBLDIR=/home/vehu/g/vehu.gld
+M_YDB_ROUTINES=<sourced gtmroutines>`). `m vista exec --engine ydb --transport
+docker` (m-cli) passes **neither** — `config.Resolve` fills `GblDir`/`Routines`
+from the *host* `gtmgbldir`/`gtmroutines`, which are empty when targeting a
+container — so `SET $ZGBLDIR` was skipped and exec faulted `ZGBLDIRUNDEF` again
+(returned `ok:true, stdout:""` up the stack, looking like a silent no-op).
+
+**Fix:** `Session.wrap()` now wraps the docker argv in **`docker exec -i <c> bash
+-lc <shJoin(argv)>`** — a *login shell* that sources the container's own
+`gtmgbldir`/`gtmroutines`/`gtm_dist`, so the engine env is established with **no
+explicit flags**. This mirrors m-cli's `DockerRunner` (which already drives these
+same containers via `bash -lc` — see m-cli's docker-routines fallback), unifying
+the two docker paths. The runtime `SET $ZGBLDIR`/`$ZROUTINES` injection stays as
+an *override* layer for an explicit `--gbldir`/`--routines` (or a staged routine
+dir) on top of what the login shell resolves. Requires `bash` in the container
+(present in vehu + m-test-engine).
+
+**Validation (2026-06-17):** unit `TestDocker_WrapsArgv`/`TestDocker_Util_Argv`
+updated to the `bash -lc` form (TDD); `go test -race ./...` + `golangci-lint`
+green; `make test-it` (m-test-engine) green. **Live on vehu (zero path flags):**
+`m-ydb exec eval 'W $ZV' --transport docker` → `GT.M V7.0-005 …`;
+`'W $P($G(^DIC(200,0)),"^",1)'` → `NEW PERSON`; `lifecycle status` →
+running/healthy/r2.02. Unblocks `m vista exec`/`status` in m-cli (and the vdocs
+SKL S2.2 live-DD seam). See [[engine-access-through-driver-stack]].
