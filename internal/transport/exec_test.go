@@ -117,8 +117,9 @@ func TestExecTrapped_DockerPrependsZRoutines(t *testing.T) {
 	if _, err := s.ExecTrapped(context.Background(), mdriver.ExecRequest{EntryRef: "hi^ZZT"}); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	// Plain `docker exec` (no -e): the container's default path keeps %XCMD
-	// linked; the staged dir is layered on via $ZROUTINES inside the command.
+	// Docker runs via `docker exec -i <c> bash -lc`: the login shell sources the
+	// container's resident routine path (so %XCMD stays linked) and the staged
+	// dir is layered on via $ZROUTINES inside the command.
 	if len(rr.argv) < 5 || rr.argv[0] != "docker" || rr.argv[3] != "m-test-engine" {
 		t.Fatalf("argv = %v, want a plain docker exec", rr.argv)
 	}
@@ -135,10 +136,8 @@ func TestExecTrapped_DockerSetsZGblDir(t *testing.T) {
 	if _, err := s.ExecTrapped(context.Background(), mdriver.ExecRequest{Command: "write $data(^XPD(9.7,0))"}); err != nil {
 		t.Fatalf("exec: %v", err)
 	}
-	// docker exec carries no -e, and the container's default env has no
-	// ydb_gbldir — so the global directory must be established at runtime inside
-	// the command (mirroring the $ZROUTINES layering); otherwise any global
-	// access faults %YDB-E-ZGBLDIRUNDEF.
+	// An explicit --gbldir is applied at runtime via SET $ZGBLDIR (mirroring the
+	// $ZROUTINES layering), overriding whatever the login shell resolved.
 	wrapped := rr.argv[len(rr.argv)-1]
 	if !containsStr(wrapped, `SET $ZGBLDIR="/home/vehu/g/vehu.gld"`) {
 		t.Errorf("command did not set $ZGBLDIR for docker: %q", wrapped)

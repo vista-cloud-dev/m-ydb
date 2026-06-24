@@ -94,9 +94,9 @@ func (s *Session) yottabin() string {
 	return "yottadb"
 }
 
-// env returns the YottaDB environment for a local invocation; docker relies on
-// the container's preconfigured env and remote sources EnvFile on the far side,
-// so both return nil.
+// env returns the YottaDB environment for a local invocation; docker sources the
+// container's preconfigured env via the login shell wrap() opens and remote
+// sources EnvFile on the far side, so both return nil.
 func (s *Session) env() []string {
 	if s.isDocker() || s.isRemote() {
 		return nil
@@ -115,12 +115,21 @@ func (s *Session) env() []string {
 }
 
 // wrap adapts the engine argv to the active transport: `docker exec -i
-// <container>` for docker, an `ssh` invocation for remote, or the bare argv for
-// local.
+// <container> bash -lc` for docker, an `ssh` invocation for remote, or the bare
+// argv for local.
+//
+// Docker goes through a login shell so the container's preconfigured engine env
+// (gtmgbldir/gtmroutines/gtm_dist) is sourced — a bare `docker exec yottadb …`
+// runs non-login and leaves them undefined, faulting %YDB-E-ZGBLDIRUNDEF on a
+// GT.M-configured VistA like `vehu` (its env lives in a login profile, not the
+// default docker-exec environment). This mirrors m-cli's DockerRunner, which
+// already drives the same containers via `bash -lc`. The runtime $ZGBLDIR/
+// $ZROUTINES injection in exec.go still layers an explicit --gbldir/--routines
+// (or a staged routine dir) on top of whatever the login shell resolved.
 func (s *Session) wrap(argv []string) []string {
 	switch {
 	case s.isDocker():
-		return append([]string{"docker", "exec", "-i", s.cfg.Container}, argv...)
+		return []string{"docker", "exec", "-i", s.cfg.Container, "bash", "-lc", shJoin(argv)}
 	case s.isRemote():
 		return s.sshWrap(argv)
 	default:
