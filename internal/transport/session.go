@@ -220,6 +220,26 @@ func (s *Session) Exec(ctx context.Context, req mdriver.ExecRequest) (mdriver.Ex
 	return mdriver.ExecResult{Stdout: out.Stdout, Status: out.Code}, nil
 }
 
+// ContainerRoutines returns the engine's own $ZROUTINES as resolved inside the
+// container — the source axis's fallback when the host config pins no
+// --routines/$ydb_routines. A real VistA image (vehu) keeps its routine source
+// path in the container's engine profile (which wrap()'s `bash -lc` login shell
+// sources), not the host environment, so the source store could not otherwise
+// find a dir to stage into. Docker-only (returns "" for local/remote, where the
+// host env/EnvFile already supplies the path). The returned `object*(src …)`
+// form is exactly what source.ParseRoutinesDirs consumes. With no --routines set,
+// Exec layers no $ZROUTINES override, so this reads the login-shell value.
+func (s *Session) ContainerRoutines(ctx context.Context) (string, error) {
+	if !s.isDocker() {
+		return "", nil
+	}
+	res, err := s.Exec(ctx, mdriver.ExecRequest{Command: "write $ZROUTINES"})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(res.Stdout), nil
+}
+
 // Health runs the readiness probe `%XCMD 'write 1'` and reports ready when the
 // engine echoes "1" (plan §3). Engine-version probing is added in M1.
 func (s *Session) Health(ctx context.Context) (mdriver.Health, error) {

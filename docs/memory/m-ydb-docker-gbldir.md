@@ -83,3 +83,41 @@ green; `make test-it` (m-test-engine) green. **Live on vehu (zero path flags):**
 `'W $P($G(^DIC(200,0)),"^",1)'` → `NEW PERSON`; `lifecycle status` →
 running/healthy/r2.02. Unblocks `m vista exec`/`status` in m-cli (and the vdocs
 SKL S2.2 live-DD seam). See [[engine-access-through-driver-stack]].
+
+## Follow-on: source-store (load/sync) path now container-aware too (2026-06-30)
+The 2026-06-17 login-shell fix made the **exec** path resolve the container's env
+with zero flags — but the **source axis** (`exec load`, all of `sync`) takes a
+SEPARATE path: `config.SourceStore` reads the routine *write* dirs from
+`ParseRoutinesDirs($ydb_routines)` resolved off the **host** env, never the
+container. Against a real VistA image (`vehu`) the host has no `ydb_routines`, so
+`SourceStore` returned **`no routine source directory: set --routines or
+$ydb_routines`** and `exec load` staged nothing — which is exactly how
+**`v pkg install` surfaced as `stage ZVPKGRD: driver loaded no routine`** (its
+`runMScript` refuses up front when `cl.Load` reports zero loaded — lifecycle.go
+explicitly anticipates "no routine source directory configured → loads nothing").
+This was the **OPEN ZVPKGRD install snag** the v-rpc-tap reaper-live-proof memory
+flagged as a P4 blocker — NOT a v-pkg bug, NOT a regression of T0a.3 (that proof
+passed `M_YDB_ROUTINES=<sourced gtmroutines>` explicitly; nothing sets it now).
+
+**Fix:** new `Session.ContainerRoutines(ctx)` reads the engine's own
+`$ZROUTINES` (docker-only; with no `--routines` set, `Exec` layers no override so
+it returns the login-shell value, whose `object*(src …)` form `ParseRoutinesDirs`
+already parses). `config.SourceStore` calls it as a **fallback only when host
+`Routines` is empty + docker + a container is set** — so explicit `--routines`
+and the bare m-test-engine path are untouched (no regression; auto-discovery is
+strictly additive, filling a case that previously errored). vehu's
+`$ZROUTINES` → source dirs `/home/vehu/p` (primary write target) `/home/vehu/s`
+`/home/vehu/r`.
+
+**Validation (2026-06-30):** unit `TestContainerRoutines_DockerReadsZRoutines` /
+`_NonDockerIsNoop` (TDD red→green, fake runner); `gofmt`/`go vet`/`golangci-lint`/
+`go test ./...` green; `make test-it` (m-test-engine) green. **Live, zero path
+flags:** `m-ydb exec load ZVPROBE.m --transport docker` → `loaded:[ZVPROBE.m]
+compiled:true` on **both** vehu and m-test-engine (was BAD_CONFIG); `v pkg install
+vslrtap.kids --engine ydb --transport docker --dry-run` → 3 routines NEW, exit 0
+(was the ZVPKGRD refusal). GOTCHA: `sync rm` removes only the `.m` **source**, not
+the compiled `.o` — a staged scratch routine still links from its object after rm
+(host can't delete the `.o`: `rm` is deny-gated, even via an M PIPE device). The
+real `v pkg install` (not dry-run) now reaches KIDS filing and hits a SEPARATE
+v-pkg issue (`stage-incomplete: staged 794 of 345 nodes`) — beyond the ZVPKGRD
+seam this fix closes. See [[m-ydb-driver-m0]], [[engine-access-through-driver-stack]].

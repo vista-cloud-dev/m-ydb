@@ -7,6 +7,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -120,6 +121,15 @@ func (c *Conn) SourceStore() (source.Store, error) {
 		return nil, fmt.Errorf("sync over the remote (SSH) transport is not yet supported")
 	}
 	dirs := c.SourceDirs()
+	if len(dirs) == 0 && c.Transport == transportDocker && c.Container != "" {
+		// The host pinned no routine source path; a real VistA image keeps it in
+		// the container's own engine profile (vehu), so ask the engine for its
+		// $ZROUTINES rather than failing. Best-effort: a probe error leaves dirs
+		// empty and falls through to the clear "set --routines" message below.
+		if cr, err := c.NewSession().ContainerRoutines(context.Background()); err == nil {
+			dirs = source.ParseRoutinesDirs(cr)
+		}
+	}
 	if len(dirs) == 0 {
 		return nil, fmt.Errorf("no routine source directory: set --routines or $ydb_routines")
 	}
