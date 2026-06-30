@@ -113,11 +113,24 @@ strictly additive, filling a case that previously errored). vehu's
 `_NonDockerIsNoop` (TDD red→green, fake runner); `gofmt`/`go vet`/`golangci-lint`/
 `go test ./...` green; `make test-it` (m-test-engine) green. **Live, zero path
 flags:** `m-ydb exec load ZVPROBE.m --transport docker` → `loaded:[ZVPROBE.m]
-compiled:true` on **both** vehu and m-test-engine (was BAD_CONFIG); `v pkg install
-vslrtap.kids --engine ydb --transport docker --dry-run` → 3 routines NEW, exit 0
-(was the ZVPKGRD refusal). GOTCHA: `sync rm` removes only the `.m` **source**, not
-the compiled `.o` — a staged scratch routine still links from its object after rm
-(host can't delete the `.o`: `rm` is deny-gated, even via an M PIPE device). The
-real `v pkg install` (not dry-run) now reaches KIDS filing and hits a SEPARATE
-v-pkg issue (`stage-incomplete: staged 794 of 345 nodes`) — beyond the ZVPKGRD
-seam this fix closes. See [[m-ydb-driver-m0]], [[engine-access-through-driver-stack]].
+compiled:true` on **both** vehu and m-test-engine (was BAD_CONFIG). **Full
+`v pkg` lifecycle proven byte-clean on vehu (2026-06-30):** `install
+vslrtap.kids --engine ydb --transport docker --auto-snapshot` → **status 3,
+installed:true** (3 greenfield routines); `verify` → installed:true, all 3
+present; `uninstall` → byte-clean (source + `.o` objects + #9.7 `B` entry +
+`^XTMP("VPKGI")` staging global all gone). So the **OPEN ZVPKGRD P4 install
+blocker is fully CLOSED** — install path is healthy end-to-end.
+
+GOTCHAS: (1) a transient `stage-incomplete: staged 794 of 345 nodes` on the FIRST
+attempt was **stale `^XTMP("VPKGI")` residue** from a prior failed install, NOT a
+bug — `dist/kids/vslrtap.kids` parses to exactly 345 pairs (`b.Pairs()` =
+`EnginePairs` = 345 distinct subs, 0 dups); from a clean `VPKGI=0` it staged
+345/345 and installed. The finalize's count check correctly refused the polluted
+stage. (2) `v pkg uninstall` (`^%ZOSF("DEL")`, Kernel-native) removes BOTH `.m`
+and `.o`; `m-ydb sync rm` removes only the `.m` **source** — a scratch routine
+still links from its leftover object after `sync rm`. To delete a stray routine
+on a **VistA** engine, use `^%ZOSF("DEL")` via `m vista exec` (engine-native, not
+a shell `rm` — `rm` is deny-gated even through an M PIPE device). A **bare** YDB
+engine (m-test-engine) has no `^%ZOSF`, so a `sync rm`'d routine's `.o` can't be
+cleaned that way — recreate the disposable engine instead. See [[m-ydb-driver-m0]],
+[[engine-access-through-driver-stack]].
